@@ -1,0 +1,7 @@
+numpy
+matplotlib
+pandas
+pytz
+firecloud
+ipython
+iso8601
