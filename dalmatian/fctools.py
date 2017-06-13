@@ -10,7 +10,6 @@ import firecloud.api
 import iso8601
 import pytz
 import matplotlib.pyplot as plt
-#import plotfunc
 
 import argparse
 
@@ -206,6 +205,91 @@ class WorkspaceManager:
 
         print(status_df['status'].value_counts())
         return status_df[['status', 'timestamp', 'workflow_id', 'submission_id', 'configuration']]
+
+
+    def display_status(self, configuration, entity='sample'):
+        """
+        """
+        status_df = self.get_submission_status(configuration)
+
+        # get workflow details from 1st submission
+        metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, status_df['submission_id'][0], status_df['workflow_id'][0])
+        assert metadata.status_code==200
+        metadata = metadata.json()
+
+        workflow_tasks = list(metadata['calls'].keys())
+
+        fail_idx = status_df[status_df['status']!='Succeeded'].index
+        n_success = status_df.shape[0] - len(fail_idx)
+
+        state_df = pd.DataFrame(0, index=fail_idx, columns=workflow_tasks)
+        status_code = {'Running':1, 'Done':2, 'Failed':-1}
+        for i in fail_idx:
+            metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, status_df.loc[i, 'submission_id'], status_df.loc[i, 'workflow_id'])
+            assert metadata.status_code==200
+            metadata = metadata.json()
+            state_df.loc[i] = [status_code[metadata['calls'][t][-1]['executionStatus']] if t in metadata['calls'] else 0 for t in workflow_tasks]
+        state_df.rename(columns={i:i.split('.')[1] for i in state_df.columns}, inplace=True)
+        state_df[['workflow_id', 'submission_id']] = status_df.loc[fail_idx, ['workflow_id', 'submission_id']]
+
+        return state_df
+
+
+    def get_stderr(self, state_df, task_name):
+        """
+        Fetch stderrs from bucket (returns list of str)
+        """
+        df = state_df[state_df[task_name]==-1]
+        fail_idx = df.index
+        stderrs = []
+        for n,i in enumerate(fail_idx):
+            print('\rFetching stderr for task {}/{}'.format(n+1, len(fail_idx)), end='\r')
+            metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, state_df.loc[i, 'submission_id'], state_df.loc[i, 'workflow_id'])
+            assert metadata.status_code==200
+            metadata = metadata.json()
+            stderr_path = metadata['calls'][[i for i in metadata['calls'].keys() if i.split('.')[1]==task_name][0]][-1]['stderr']
+            s = subprocess.check_output('gsutil cat '+stderr_path, shell=True, executable='/bin/bash').decode()
+            stderrs.append(s)
+        return stderrs
+
+
+    def get_submission_history(self, configuration, sample_id):
+        """
+        Currently only supports samples
+        """
+
+        # get submissions
+        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
+        assert submissions.status_code==200
+        submissions = submissions.json()
+
+        # filter by configuration
+        submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
+
+        # filter by sample
+        submissions = [s for s in submissions if s['submissionEntity']['entityName']==sample_id and 'Succeeded' in list(s['workflowStatuses'].keys())]
+
+        outputs_df = []
+        for s in submissions:
+            r = firecloud.api.get_submission(self.namespace, self.workspace, s['submissionId'])
+            assert r.status_code==200
+            r = r.json()
+
+            metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, s['submissionId'], r['workflows'][0]['workflowId'])
+            assert metadata.status_code==200
+            metadata = metadata.json()
+
+            outputs_s = pd.Series(metadata['outputs'])
+            outputs_s.index = [i.split('.',1)[1].replace('.','_') for i in outputs_s.index]
+            outputs_s['submission_date'] = iso8601.parse_date(s['submissionDate']).strftime('%H:%M:%S %m/%d/%Y')
+            outputs_df.append(outputs_s)
+
+        outputs_df = pd.concat(outputs_df, axis=1).T
+        # sort by most recent first
+        outputs_df = outputs_df.iloc[np.argsort([datetime.timestamp(iso8601.parse_date(s['submissionDate'])) for s in submissions])[::-1]]
+        outputs_df.index = ['run_{}'.format(str(i)) for i in np.arange(outputs_df.shape[0],0,-1)]
+
+        return outputs_df
 
 
     def get_storage(self):
@@ -404,7 +488,7 @@ class WorkspaceManager:
         return r
 
 
-    def check_configuration(config_name):
+    def check_configuration(self, config_name):
         """
         Get version of a configuration and compare to latest available in repository
         """
@@ -707,7 +791,7 @@ def main(argv=None):
     # Initialize core parser
     descrip  = 'dalmatian [OPTIONS] CMD [arg ...]\n'
     descrip += '       dalmatian [ --help | -v | --version ]'
-    parser = argparse.ArgumentParser(description='dalmatian: the loyal compainion to FISS')
+    parser = argparse.ArgumentParser(description='dalmatian: the loyal companion to FISS')
 
 
 
