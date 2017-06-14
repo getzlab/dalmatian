@@ -29,6 +29,17 @@ def workflow_time(workflow):
         return np.NaN
 
 
+def _gs_delete_list(file_list, chunk_size=500):
+    """
+    """
+    # number of calls is limited by command line size limit
+    n = int(np.ceil(len(file_list)/chunk_size))
+    for i in range(n):
+        x = file_list[chunk_size*i:chunk_size*(i+1)]
+        cmd = 'echo -e "{}" | gsutil -m rm -I'.format('\n'.join(x))
+        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
+
+
 class WorkspaceManager:
     def __init__(self, namespace, workspace, timezone='America/New_York'):
         self.namespace = namespace
@@ -337,6 +348,14 @@ class WorkspaceManager:
                 task_dfs[task_name] = pd.DataFrame(index=workflow_status_df.index, columns=['time_h', 'total_time_h', 'max_preempt_time_h', 'machine_type', 'attempts', 'start_time', 'est_cost', 'job_ids'])
                 for i in workflow_status_df.index:
                     task_dfs[task_name].loc[i, 'time_h'] = workflow_time(metadata_dict[i]['calls'][t][-1])/3600
+
+                    # subtract time spent waiting for quota
+                    quota_time = [e for e in metadata_dict[i]['calls'][t][-1]['executionEvents'] if e['description']=='waiting for quota']
+                    if quota_time:
+                        quota_time = quota_time[0]
+                        quota_time = (convert_time(quota_time['endTime']) - convert_time(quota_time['startTime']))/3600
+                        task_dfs[task_name].loc[i, 'time_h'] -= quota_time
+
                     exec_times_h = [workflow_time(t_attempt)/3600 for t_attempt in metadata_dict[i]['calls'][t]]
                     task_dfs[task_name].loc[i, 'total_time_h'] = np.sum(exec_times_h)
 
@@ -396,13 +415,37 @@ class WorkspaceManager:
             print("Successfully deleted SnapshotID {}.".format(old_version))
 
 
+    def get_entities(self, etype, page_size=1000):
+        """
+        Paginated query replacing 'get_entities_tsv'
+        """
+        # get first page
+        r = firecloud.api.get_entities_query(self.namespace, self.workspace, etype, page=1, page_size=page_size)
+        assert r.status_code==200
+        r = r.json()
+
+        total_pages = r['resultMetadata']['filteredPageCount']
+        all_entities = r['results']
+        for page in range(2,total_pages+1):
+            r = firecloud.api.get_entities_query(self.namespace, self.workspace, etype, page=page, page_size=page_size)
+            assert r.status_code==200
+            r = r.json()
+            all_entities.extend(r['results'])
+
+        # convert to DataFrame
+        df = pd.DataFrame({i['name']:i['attributes'] for i in all_entities}).T
+        df.index.name = 'sample_id'
+        return df
+
+
     def get_samples(self):
         """
         Get DataFrame with samples and their attributes
         """
-        t = firecloud.api.get_entities_tsv(self.namespace, self.workspace, 'sample')
-        assert t.status_code==200
-        return pd.read_csv(io.StringIO(t.text), index_col=0, sep='\t')
+        # r = firecloud.api.get_entities_tsv(self.namespace, self.workspace, 'sample')
+        # assert r.status_code==200
+        # return pd.read_csv(io.StringIO(r.text), index_col=0, sep='\t')
+        return self.get_entities('sample')
 
 
     def get_sample_sets(self):
