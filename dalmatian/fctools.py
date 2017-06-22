@@ -31,6 +31,7 @@ def workflow_time(workflow):
 
 def _gs_delete_list(file_list, chunk_size=500):
     """
+    Delete list of files (paths starting with gs://)
     """
     # number of calls is limited by command line size limit
     n = int(np.ceil(len(file_list)/chunk_size))
@@ -40,7 +41,49 @@ def _gs_delete_list(file_list, chunk_size=500):
         subprocess.check_call(cmd, shell=True, executable='/bin/bash')
 
 
-class WorkspaceManager:
+def _gs_download(file_list, dest_dir, chunk_size=500):
+    """
+    Download list of files (paths starting with gs://)
+    """
+    n = int(np.ceil(len(file_list)/chunk_size))
+    for i in range(n):
+        x = file_list[chunk_size*i:chunk_size*(i+1)]
+        cmd = 'echo -e "{}" | gsutil -m cp -I {}'.format('\n'.join(x), dest_dir)
+        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
+
+
+class WorkspaceCollection(object):
+    def __init__(self):
+        self.workspace_list = []
+
+    def add(self, workspace_manager):
+        assert isinstance(workspace_manager, WorkspaceManager)
+        self.workspace_list.append(workspace_manager)
+
+    def remove(self, workspace_manager):
+        self.workspace_list.remove(workspace_manager)
+
+    def print_workspaces(self):
+        print('Workspaces in collection:')
+        for i in self.workspace_list:
+            print('  {}/{}'.format(i.namespace, i.workspace))
+
+    def get_submission_status(self, show_namespaces=False):
+        """
+        Get status of all submissions across workspaces
+        """
+        dfs = []
+        for i in self.workspace_list:
+            df = i.get_submission_status(show_namespaces=show_namespaces)
+            if show_namespaces:
+                df['workspace'] = '{}/{}'.format(i.namespace, i.workspace)
+            else:
+                df['workspace'] = i.workspace
+            dfs.append(df)
+        return pd.concat(dfs, axis=0)
+
+
+class WorkspaceManager(object):
     def __init__(self, namespace, workspace, timezone='America/New_York'):
         self.namespace = namespace
         self.workspace = workspace
@@ -67,7 +110,7 @@ class WorkspaceManager:
         print('  * '+r.json()['message'])
 
 
-    def upload_samples(self, df, participant_df=None):
+    def upload_samples(self, df, participant_df=None, add_participant_samples=False):
         """
         Upload samples stored in a pandas DataFrame, and populate the required
         participant, sample, and sample_set attributes
@@ -112,9 +155,10 @@ class WorkspaceManager:
             assert s.status_code==200
             print('Succesfully imported sample sets.')
 
-        # 4) add participant.samples_
-        print('  * The FireCloud data model currently does not provide participant.samples\n    Adding "participant.samples_" as an explicit attribute.')
-        self.update_participant_samples()
+        if add_participant_samples:
+            # 4) add participant.samples_
+            print('  * The FireCloud data model currently does not provide participant.samples\n    Adding "participant.samples_" as an explicit attribute.')
+            self.update_participant_samples()
 
 
     def upload_participants(self, participant_ids):
@@ -155,9 +199,30 @@ class WorkspaceManager:
         print('\n    Finished updating participants in {}/{}'.format(self.namespace, self.workspace))
 
 
+    def update_sample_attributes(self, sample_id, attr_dict):
+        """
+        Set or update attributes in attr_dict
+        """
+        attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+        r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample', sample_id, attrs)
+        assert r.status_code==200
+
+
+    def delete_sample_attributes(self, sample_id, attrs):
+        """
+        Delete sample attributes
+        """
+        if isinstance(attrs, str):
+            rm_list = [{"op": "RemoveAttribute", "attributeName": attrs}]
+        elif isinstance(attrs, Iterable):
+            rm_list = [{"op": "RemoveAttribute", "attributeName": i} for i in attrs]
+        r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample', sample_id, rm_list)
+        assert r.status_code==200
+
+
     def update_attributes(self, attr_dict):
         """
-        Wrapper for API 'set' call
+        Set or update workspace attributes. Wrapper for API 'set' call
         """
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
         r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)  # attrs must be list
@@ -165,7 +230,40 @@ class WorkspaceManager:
         print('Successfully updated workspace attributes in {}/{}'.format(self.namespace, self.workspace))
 
 
-    def get_submission_status(self, configuration):
+    def get_submission_status(self, configuration=None, show_namespaces=False):
+        """
+        Get status of all submissions in the workspace (replicates UI Monitor)
+        """
+        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
+        assert submissions.status_code==200
+        submissions = submissions.json()
+
+        if configuration is not None:
+            submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
+
+        statuses = ['Succeeded', 'Running', 'Failed', 'Aborted', 'Submitted']
+        df = []
+        for s in submissions:
+            d = {
+                'entity_id':s['submissionEntity']['entityName'],
+                'status':s['status'],
+                'submission_id':s['submissionId'],
+                'date':iso8601.parse_date(s['submissionDate']).strftime('%H:%M:%S %m/%d/%Y'),
+            }
+            d.update({i:s['workflowStatuses'].get(i,0) for i in statuses})
+            if show_namespaces:
+                d['configuration'] = s['methodConfigurationNamespace']+'/'+s['methodConfigurationName']
+            else:
+                d['configuration'] = s['methodConfigurationName']
+            df.append(d)
+        df = pd.DataFrame(df)
+        df.set_index('entity_id', inplace=True)
+        df['date'] = pd.to_datetime(df['date'])
+        df = df[['configuration', 'status']+statuses+['date', 'submission_id']]
+        return df.sort_values('date')[::-1]
+
+
+    def get_sample_status(self, configuration):
         """
         Get status of lastest submission for samples in the workspace
 
@@ -203,13 +301,15 @@ class WorkspaceManager:
                     for w in r['workflows']:
                         sample_id = w['workflowEntity']['entityName']
                         if sample_id not in sample_dict or sample_dict[sample_id]['timestamp']<ts:
-                            sample_dict[sample_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':w['workflowId']}
+                            if 'workflowId' in w:
+                                sample_dict[sample_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':w['workflowId']}
+                            else:
+                                sample_dict[sample_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':'NA'}
             elif s['submissionEntity']['entityType']=='participant':
                 participant_id = s['submissionEntity']['entityName']
                 if participant_id not in sample_dict or sample_dict[participant_id]['timestamp']<ts:
                     status = r['workflows'][0]['status']
                     sample_dict[participant_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':r['workflows'][0]['workflowId']}
-                # print(participant_id)
 
         status_df = pd.DataFrame(sample_dict).T
         status_df.index.name = 'sample_id'
@@ -448,18 +548,21 @@ class WorkspaceManager:
         return self.get_entities('sample')
 
 
-    def get_sample_sets(self):
+    def get_sample_sets(self, pattern=None):
         """
         Get DataFrame with sample sets and their attributes
         """
-        t = firecloud.api.get_entities(self.namespace, self.workspace, 'sample_set')
-        assert t.status_code==200
-        t = t.json()
-
-        sample_set_ids = [i['name'] for i in t]
-        columns = list(t[0]['attributes'].keys())
+        r = firecloud.api.get_entities(self.namespace, self.workspace, 'sample_set')
+        assert r.status_code==200
+        r = r.json()
+        
+        if pattern is not None:
+            r =[i for i in r if pattern in i['name']]
+        
+        sample_set_ids = [i['name'] for i in r]
+        columns = np.unique([k for s in r for k in s['attributes'].keys()])
         df = pd.DataFrame(index=sample_set_ids, columns=columns)
-        for s in t:
+        for s in r:
             for c in columns:
                 if c in s['attributes']:
                     if isinstance(s['attributes'][c], dict):
@@ -475,6 +578,7 @@ class WorkspaceManager:
         """
         r = firecloud.api.get_entity(self.namespace, self.workspace, 'sample_set', sample_set_id)
         if r.status_code==200:  # exists -> update
+            r = r.json()
             items_dict = r['attributes']['samples']
             items_dict['items'] = [{'entityName': i, 'entityType': 'sample'} for i in sample_ids]
             attrs = [{'addUpdateAttribute': items_dict, 'attributeName': 'samples', 'op': 'AddUpdateAttribute'}]
@@ -543,6 +647,31 @@ class WorkspaceManager:
         mrversion = get_method_version(r['methodRepoMethod']['methodNamespace'], r['methodRepoMethod']['methodName'])
         print('Method for config. {0}: {1} version {2} (latest: {3})'.format(config_name, r['methodRepoMethod']['methodName'], r['methodRepoMethod']['methodVersion'], mrversion))
         return r['methodRepoMethod']['methodVersion']
+
+
+    def get_configs(self):
+        """
+        All configurations in the workspace
+        """
+        r = firecloud.api.list_workspace_configs(self.namespace, self.workspace)
+        assert r.status_code==200
+        r = r.json()
+        df = pd.io.json.json_normalize(r)
+        df.rename(columns={c:c.split('methodRepoMethod.')[-1] for c in df.columns}, inplace=True)
+        return df
+
+
+    def create_submission(self, cnamespace, config, entity, etype, expression=None, use_callcache=True):
+        """
+
+        """
+        r = firecloud.api.create_submission(self.namespace, self.workspace,
+            cnamespace, config, entity, etype, expression=expression, use_callcache=use_callcache)
+        if r.status_code==201:
+            print('Successfully created submission {}.'.format(r.json()['submissionId']))
+        else:
+            print('Submission failed.')
+            return r
 
 
 #------------------------------------------------------------------------------
