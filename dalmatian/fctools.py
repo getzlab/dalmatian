@@ -10,7 +10,8 @@ import firecloud.api
 import iso8601
 import pytz
 import matplotlib.pyplot as plt
-
+from collections import defaultdict
+import multiprocessing as mp
 import argparse
 
 # Collection of high-level wrapper functions for FireCloud API
@@ -27,6 +28,14 @@ def workflow_time(workflow):
         return convert_time(workflow['end']) - convert_time(workflow['start'])
     else:
         return np.NaN
+
+
+def _gs_get_bucket_files(bucket_id):
+    """
+    Get list of all files stored in bucket
+    """
+    s = subprocess.check_output('gsutil ls gs://{}/**'.format(bucket_id), shell=True, executable='/bin/bash')
+    return s.decode().strip().split('\n')
 
 
 def _gs_delete_list(file_list, chunk_size=500):
@@ -108,6 +117,14 @@ class WorkspaceManager(object):
         assert r.status_code==202
         print('Workspace {}/{} successfully deleted.'.format(self.namespace, self.workspace))
         print('  * '+r.json()['message'])
+
+
+    def get_bucket_id(self):
+        r = firecloud.api.get_workspace(self.namespace, self.workspace)
+        assert r.status_code==200
+        r = r.json()
+        bucket_id = r['workspace']['bucketName']
+        return bucket_id
 
 
     def upload_samples(self, df, participant_df=None, add_participant_samples=False):
@@ -199,25 +216,56 @@ class WorkspaceManager(object):
         print('\n    Finished updating participants in {}/{}'.format(self.namespace, self.workspace))
 
 
-    def update_sample_attributes(self, sample_id, attr_dict):
+    def update_entity_attributes(self, etype, ename, attr_dict):
         """
         Set or update attributes in attr_dict
         """
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-        r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample', sample_id, attrs)
+        r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, attrs)
         assert r.status_code==200
 
 
-    def delete_sample_attributes(self, sample_id, attrs):
+    def update_sample_attributes(self, sample_id, attr_dict):
         """
-        Delete sample attributes
+        Set or update attributes in attr_dict
+        """
+        self.update_entity_attributes('sample', sample_id, attr_dict)
+
+
+    def update_sample_set_attributes(self, sample_set_id, attr_dict):
+        """
+        Set or update attributes in attr_dict
+        """
+        self.update_entity_attributes('sample_set', sample_set_id, attr_dict)
+
+
+    def delete_entity_attributes(self, etype, ename, attrs, check=True):
+        """
+        Delete attributes
         """
         if isinstance(attrs, str):
             rm_list = [{"op": "RemoveAttribute", "attributeName": attrs}]
         elif isinstance(attrs, Iterable):
             rm_list = [{"op": "RemoveAttribute", "attributeName": i} for i in attrs]
-        r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample', sample_id, rm_list)
-        assert r.status_code==200
+        r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, rm_list)
+        if check:
+            assert r.status_code==200
+        else:
+            return r
+
+
+    def delete_sample_attributes(self, sample_id, attrs):
+        """
+        Delete attributes
+        """
+        self.delete_entity_attributes(self, 'sample', sample_id, attrs)
+
+
+    def delete_sample_set_attributes(self, sample_set_id, attrs):
+        """
+        Delete attributes
+        """
+        self.delete_entity_attributes(self, 'sample_set', sample_set_id, attrs)
 
 
     def update_attributes(self, attr_dict):
@@ -230,7 +278,7 @@ class WorkspaceManager(object):
         print('Successfully updated workspace attributes in {}/{}'.format(self.namespace, self.workspace))
 
 
-    def get_submission_status(self, configuration=None, show_namespaces=False):
+    def get_submission_status(self, filter_active=False, configuration=None, show_namespaces=False):
         """
         Get status of all submissions in the workspace (replicates UI Monitor)
         """
@@ -260,6 +308,8 @@ class WorkspaceManager(object):
         df.set_index('entity_id', inplace=True)
         df['date'] = pd.to_datetime(df['date'])
         df = df[['configuration', 'status']+statuses+['date', 'submission_id']]
+        if filter_active:
+            df = df[(df['Running']!=0) | (df['Submitted']!=0)]
         return df.sort_values('date')[::-1]
 
 
@@ -314,8 +364,135 @@ class WorkspaceManager(object):
         status_df = pd.DataFrame(sample_dict).T
         status_df.index.name = 'sample_id'
 
-        print(status_df['status'].value_counts())
+        # print(status_df['status'].value_counts())
         return status_df[['status', 'timestamp', 'workflow_id', 'submission_id', 'configuration']]
+
+
+    def get_sample_set_status(self, configuration):
+        """
+        Get status of lastest submission for samples in the workspace
+
+        Columns: status (Suceeded, Failed, Submitted), submission timestamp, submission ID
+        """
+        # get submissions
+        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
+        assert submissions.status_code==200
+        submissions = submissions.json()
+
+        # filter by configuration
+        submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
+
+        # get status of last run submission
+        sample_set_dict = {}
+        for k,s in enumerate(submissions):
+            print('\rFetching submission {}/{}'.format(k+1, len(submissions)), end='')
+            r = firecloud.api.get_submission(self.namespace, self.workspace, s['submissionId'])
+            assert r.status_code==200
+            r = r.json()
+
+            ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
+            if s['submissionEntity']['entityType']=='sample_set':
+                sample_set_id = s['submissionEntity']['entityName']
+                if sample_set_id not in sample_set_dict or sample_set_dict[sample_set_id]['timestamp']<ts:
+                    assert len(r['workflows'])==1
+                    status = r['workflows'][0]['status']
+                    sample_set_dict[sample_set_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':r['workflows'][0]['workflowId']}
+            else:
+                raise ValueError('Incompatible submission entity type: {}'.format(s['submissionEntity']['entityType']))
+        print()
+        status_df = pd.DataFrame(sample_set_dict).T
+        status_df.index.name = 'sample_set_id'
+
+        # print(status_df['status'].value_counts())
+        return status_df[['status', 'timestamp', 'workflow_id', 'submission_id', 'configuration']]
+
+
+    def patch_attributes(self, cnamespace, configuration, dry_run=False, entity='sample'):
+        """
+        Patch attributes for all samples/tasks that run successfully but were not written to database
+        This includes outputs from successful tasks in workflows that failed
+        """
+
+        # get list of expected outputs
+        r = firecloud.api.get_workspace_config(self.namespace, self.workspace, cnamespace, configuration)
+        assert r.status_code==200
+        r = r.json()
+        output_map = {i.split('.')[-1]:j.split('this.')[-1] for i,j in r['outputs'].items()}
+        columns = list(output_map.values())
+
+        if entity=='sample':
+            # get list of all samples in workspace
+            print('Fetching sample status ...')
+            samples_df = self.get_samples()
+            incomplete_df = samples_df[samples_df[columns].isnull().any(axis=1)]
+
+            # get workflow status for all submissions
+            sample_status_df = self.get_sample_status(configuration)
+
+            # make sure successful workflows were all written to database
+            error_ix = incomplete_df.loc[sample_status_df.loc[incomplete_df.index, 'status']=='Succeeded'].index
+            if np.any(error_ix):
+                print('Attributes from {} successful jobs were not written to database.'.format(len(error_ix)))
+
+            # for remainder, assume that if attributes exists, status is successful.
+            # this doesn't work when multiple successful runs of the same task exist --> need to add this
+
+            # for incomplete samples, go through submissions and assign outputs of completed tasks
+            task_counts = defaultdict(int)
+            for n,sample_id in enumerate(incomplete_df.index):
+                print('\rPatching attributes for sample {}/{}'.format(n+1, incomplete_df.shape[0]), end='')
+
+                metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, sample_status_df.loc[sample_id, 'submission_id'], sample_status_df.loc[sample_id, 'workflow_id'])
+                # assert metadata.status_code==200
+                # metadata = metadata.json()
+                if metadata.status_code==200:
+                    metadata = metadata.json()
+                    if 'outputs' in metadata and len(metadata['outputs'])!=0 and not dry_run:
+                        attr = {output_map[k.split('.')[-1]]:t for k,t in metadata['outputs'].items()}
+                        self.update_sample_attributes(sample_id, attr)
+                    else:
+                        for task in metadata['calls']:
+                            if 'outputs' in metadata['calls'][task][-1]:
+                                if np.all([k in output_map for k in metadata['calls'][task][-1]['outputs'].keys()]):
+                                    # only update if attributes are empty
+                                    if incomplete_df.loc[sample_id, [output_map[k] for k in metadata['calls'][task][-1]['outputs']]].isnull().any():
+                                        # write to attributes
+                                        if not dry_run:
+                                            attr = {output_map[i]:j for i,j in metadata['calls'][task][-1]['outputs'].items()}
+                                            self.update_sample_attributes(sample_id, attr)
+                                        task_counts[task.split('.')[-1]] += 1
+                else:
+                    print('Metadata call failed for sample {}'.format(sample_id))
+                    print(metadata.json())
+            print()
+            for i,j in task_counts.items():
+                print('Samples patched for "{}": {}'.format(i,j))
+
+        elif entity=='sample_set':
+            print('Fetching sample set status ...')
+            sample_set_df = self.get_sample_sets()
+            # get workflow status for all submissions
+            sample_set_status_df = self.get_sample_set_status(configuration)
+
+            # any sample sets with empty attributes for configuration
+            incomplete_df = sample_set_df.loc[sample_set_status_df.index, columns]
+            incomplete_df = incomplete_df[incomplete_df.isnull().any(axis=1)]
+
+            # sample sets with successful jobs
+            error_ix = incomplete_df[sample_set_status_df.loc[incomplete_df.index, 'status']=='Succeeded'].index
+            if np.any(error_ix):
+                print('Attributes from {} successful jobs were not written to database.'.format(len(error_ix)))
+                print('Patching attributes with outputs from latest successful run.')
+                for n,sample_set_id in enumerate(incomplete_df.index):
+                    print('\r  * Patching sample set {}/{}'.format(n+1, incomplete_df.shape[0]), end='')
+                    metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, sample_set_status_df.loc[sample_set_id, 'submission_id'], sample_set_status_df.loc[sample_set_id, 'workflow_id'])
+                    assert metadata.status_code==200
+                    metadata = metadata.json()
+                    if 'outputs' in metadata and len(metadata['outputs'])!=0 and not dry_run:
+                        attr = {output_map[k.split('.')[-1]]:t for k,t in metadata['outputs'].items()}
+                        self.update_sample_set_attributes(sample_set_id, attr)
+                print()
+        print('Completed patching {} attributes in {}/{}'.format(entity, self.namespace, self.workspace))
 
 
     def display_status(self, configuration, entity='sample'):
@@ -545,7 +722,9 @@ class WorkspaceManager(object):
         # r = firecloud.api.get_entities_tsv(self.namespace, self.workspace, 'sample')
         # assert r.status_code==200
         # return pd.read_csv(io.StringIO(r.text), index_col=0, sep='\t')
-        return self.get_entities('sample')
+        df = self.get_entities('sample')
+        df['participant'] = df['participant'].apply(lambda x: x['entityName'])
+        return df
 
 
     def get_sample_sets(self, pattern=None):
@@ -555,10 +734,10 @@ class WorkspaceManager(object):
         r = firecloud.api.get_entities(self.namespace, self.workspace, 'sample_set')
         assert r.status_code==200
         r = r.json()
-        
+
         if pattern is not None:
             r =[i for i in r if pattern in i['name']]
-        
+
         sample_set_ids = [i['name'] for i in r]
         columns = np.unique([k for s in r for k in s['attributes'].keys()])
         df = pd.DataFrame(index=sample_set_ids, columns=columns)
@@ -602,6 +781,98 @@ class WorkspaceManager(object):
         r = firecloud.api.delete_sample_set(self.namespace, self.workspace, sample_set_id)
         assert r.status_code==204
         print('Sample set "{}" successfully deleted.'.format(sample_set_id))
+
+
+    def find_sample_set(self, sample_id, sample_set_df=None):
+        if sample_set_df is None:
+            sample_set_df = self.get_sample_sets()
+        return [i for i,s in zip(sample_set_df.index, sample_set_df['samples']) if 'GTEX-1C2JI-0626-SM-7DHM1' in s]
+
+
+    def purge_outdated(self, attribute, bucket_files=None, samples_df=None, ext=None):
+        """
+        Delete outdated files matching attribute (e.g., from prior/outdated runs)
+        """
+        if bucket_files is None:
+            bucket_files = _gs_get_bucket_files(self.get_bucket_id())
+
+        if samples_df is None:
+            samples_df = self.get_samples()
+
+        try:
+            assert attribute in samples_df.columns
+        except:
+            raise ValueError('Sample attribute "{}" does not exist'.format(attribute))
+
+        # make sure all samples have attribute set
+        assert samples_df[attribute].isnull().sum()==0
+
+        if ext is None:
+            ext = np.unique([os.path.split(i)[1].split('.',1)[1] for i in samples_df[attribute]])
+            assert len(ext)==1
+            ext = ext[0]
+
+        purge_paths = [i for i in bucket_files if i.endswith(ext) and i not in set(samples_df[attribute])]
+        if len(purge_paths)==0:
+            print('No outdated files to purge.')
+        else:
+            bucket_id = self.get_bucket_id()
+            assert np.all([i.startswith('gs://'+bucket_id) for i in purge_paths])
+
+            while True:
+                s = input('{} outdated files found. Delete? [y/n] '.format(len(purge_paths))).lower()
+                if s=='n' or s=='y':
+                    break
+
+            if s=='y':
+                print('Purging {} outdated files.'.format(len(purge_paths)))
+                _gs_delete_list(purge_paths, chunk_size=500)
+
+
+    def _par_delete_sample_attribute(self, args):
+        """
+        Wrapper for parallelized calls to delete_entity_attributes
+        """
+        sample_id = args[0]
+        attribute = args[1]
+        return sample_id, self.delete_entity_attributes('sample', sample_id, attribute, check=False)
+
+
+    def delete_attribute(self, attribute, delete_files=True, samples_df=None, processes=None):
+        """
+        Delete paths stored in attribute, then delete attribute itself
+        """
+        if samples_df is None:
+            samples_df = self.get_samples()
+        attribute_paths = samples_df.loc[~pd.isnull(samples_df[attribute]), attribute].values
+        sample_ids = samples_df.loc[~pd.isnull(samples_df[attribute])].index
+
+        if delete_files:
+            bucket_id = self.get_bucket_id()
+            assert np.all([i.startswith('gs://'+bucket_id) for i in attribute_paths])
+            # delete files
+            while True:
+                s = input('{} files found for attribute "{}". Delete? [y/n] '.format(len(attribute_paths), attribute)).lower()
+                if s=='n' or s=='y':
+                    break
+            if s=='y':
+                print('Deleting {} files for attribute "{}".'.format(len(attribute_paths), attribute))
+                _gs_delete_list(attribute_paths, chunk_size=500)
+
+        # delete attribute
+        while True:
+            failed_ids = []
+            with mp.Pool(processes=processes) as pool:
+                for k,r in enumerate(pool.imap_unordered(self._par_delete_sample_attribute, [(i,attribute) for i in sample_ids])):
+                    print('\rDeleting "{}" attribute for sample {}/{}'.format(attribute, k+1,len(sample_ids)), end='')
+                    if r[1].status_code!=200:
+                        failed_ids.append(r[0])
+            if len(failed_ids)>0:
+                print('\n{} delete calls failed; re-running.'.format(len(failed_ids)))
+                sample_ids = failed_ids
+            else:
+                break
+        print('\nSuccessfully deleted attribute "{}".'.format(attribute))
 
 
     def update_configuration(self, json_body):
@@ -871,7 +1142,7 @@ def redact_outdated_method_versions(method_namespace, method_name):
     r = firecloud.api.list_repository_methods()
     assert r.status_code==200
     r = r.json()
-    r = [m for m in r if m['name'] == method_name and m['namespace'] == method_namespace]
+    r = [m for m in r if m['name']==method_name and m['namespace']==method_namespace]
     versions = np.array([m['snapshotId'] for m in r])
     print('Latest version: {}'.format(np.max(versions)))
     versions = versions[versions!=np.max(versions)]
