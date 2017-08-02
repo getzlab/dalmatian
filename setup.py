@@ -1,7 +1,7 @@
 import os
 from setuptools import setup, find_packages
 from dalmatian.__about__ import __version__
-_README           = os.path.join(os.path.dirname(__file__), 'README')
+_README           = os.path.join(os.path.dirname(__file__), 'README.md')
 _LONG_DESCRIPTION = open(_README).read()
 
 # Setup information
@@ -15,7 +15,7 @@ setup(
     long_description = _LONG_DESCRIPTION,
     entry_points = {
         'console_scripts': [
-            'dalmatian = dalmatian.fctools:main'
+            'dalmatian = dalmatian.core:main'
         ]
     },
     install_requires = [

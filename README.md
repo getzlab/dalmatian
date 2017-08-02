@@ -12,14 +12,13 @@ Instructions: See INSTALL in the repository.
 
 ### Requirements
 
-FireCloud uses the Google Cloud SDK (https://cloud.google.com/sdk/) to manage
-authorization. To use dalmatian, you must install the SDK and login
-locally with
+FireCloud uses the Google Cloud SDK (https://cloud.google.com/sdk/) to manage authorization. To use dalmatian, you must install the SDK and login locally with
 
 ```
 gcloud auth application-default login
 
 ```
+
 ### Contents
 
 Including additional FireCloud Tools (enumerated below)
@@ -66,8 +65,7 @@ get_vm_cost
 
 Some functionality depends on the installed `gsutil`.
 
-When using PY3 this creates a potential issue, that is requiring
-multiple accessible python installs.
+When using PY3 this creates a potential issue of requiring multiple accessible python installs.
 
 Remediate this issue by defining an `env` variable for gsutil python
 

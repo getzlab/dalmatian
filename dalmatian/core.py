@@ -1,6 +1,6 @@
 # Author: Francois Aguet
 
-import os, io, json
+import os, sys, io, json
 import subprocess
 from datetime import datetime
 from collections import Iterable
@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import multiprocessing as mp
 import argparse
+
+from .__about__ import __version__
 
 # Collection of high-level wrapper functions for FireCloud API
 
@@ -920,7 +922,7 @@ class WorkspaceManager(object):
         return r['methodRepoMethod']['methodVersion']
 
 
-    def get_configs(self):
+    def get_configs(self, latest_only=False):
         """
         All configurations in the workspace
         """
@@ -929,8 +931,12 @@ class WorkspaceManager(object):
         r = r.json()
         df = pd.io.json.json_normalize(r)
         df.rename(columns={c:c.split('methodRepoMethod.')[-1] for c in df.columns}, inplace=True)
+        if latest_only:
+            df = df.sort_values(['methodName','methodVersion'], ascending=False).groupby('methodName').head(1)
+            # .sort_values('methodName')
+            # reverse sort
+            return df[::-1]
         return df
-
 
     def create_submission(self, cnamespace, config, entity, etype, expression=None, use_callcache=True):
         """
@@ -1225,18 +1231,19 @@ def get_vm_cost(machine_type, preemptible=True):
         return standard_dict[machine_type]
 
 def main(argv=None):
-
-    sys.exit()
-
     if not argv:
         argv = sys.argv
 
     # Initialize core parser
     descrip  = 'dalmatian [OPTIONS] CMD [arg ...]\n'
     descrip += '       dalmatian [ --help | -v | --version ]'
-    parser = argparse.ArgumentParser(description='dalmatian: the loyal companion to FISS')
+    parser = argparse.ArgumentParser(description='dalmatian: the loyal companion to FISS. Only currently useful in a REPL.')
 
+    parser.add_argument("-v", "--version", action='version', version=__version__)
 
+    args = parser.parse_args()
+
+    sys.exit()
 
 if __name__ == '__main__':
     sys.exit(main())
