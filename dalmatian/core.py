@@ -280,6 +280,18 @@ class WorkspaceManager(object):
         print('Successfully updated workspace attributes in {}/{}'.format(self.namespace, self.workspace))
 
 
+    def get_attributes(self):
+        """
+        Get workspace attributes
+        """
+        r = firecloud.api.get_workspace(self.namespace, self.workspace)
+        assert r.status_code==200
+        attr = r.json()['workspace']['attributes']
+        for k in [k for k in attr if 'library:' in k]:
+            attr.pop(k)
+        return attr
+
+
     def get_submission_status(self, filter_active=False, configuration=None, show_namespaces=False):
         """
         Get status of all submissions in the workspace (replicates UI Monitor)
@@ -1158,7 +1170,7 @@ def redact_outdated_method_versions(method_namespace, method_name):
         assert r.status_code==200
 
 
-def update_method(namespace, method, synopsis, wdl_file, public=False):
+def update_method(namespace, method, synopsis, wdl_file, public=False, delete_old=True):
     """
     push new version, then redact previous version(s)
     """
@@ -1180,7 +1192,7 @@ def update_method(namespace, method, synopsis, wdl_file, public=False):
         r = firecloud.api.update_repository_method_acl(namespace, method, r.json()['snapshotId'], [{'role': 'READER', 'user': 'public'}])
 
     # delete old version
-    if old_version is not None:
+    if old_version is not None and delete_old:
         r = firecloud.api.delete_repository_method(namespace, method, old_version)
         assert r.status_code==200
         print("Successfully deleted SnapshotID {}.".format(old_version))
