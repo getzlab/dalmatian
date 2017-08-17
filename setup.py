@@ -1,6 +1,11 @@
 import os
+import re
 from setuptools import setup, find_packages
-from dalmatian.__about__ import __version__
+with open("dalmatian/__about__.py") as reader:
+    __version__ = re.search(
+        r'__version__ ?= ?[\'\"]([\w.]+)[\'\"]',
+        reader.read()
+    ).group(1)
 _README           = os.path.join(os.path.dirname(__file__), 'README.md')
 _LONG_DESCRIPTION = open(_README).read()
 
