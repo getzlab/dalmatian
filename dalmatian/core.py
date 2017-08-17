@@ -671,7 +671,7 @@ class WorkspaceManager(object):
             # add overall cost
             workflow_status_df['est_cost'] = pd.concat([task_dfs[t.rsplit('.')[-1]]['est_cost'] for t in tasks], axis=1).sum(axis=1)
             workflow_status_df['time_h'] = [workflow_time(metadata_dict[i])/3600 for i in workflow_status_df.index]
-            workflow_status_df['cpu_hours'] = pd.concat([task_dfs[t.rsplit('.')[-1]]['total_time_h'] * task_dfs[t.rsplit('.')[-1]]['machine_type'].apply(lambda i: int(i.rsplit('-',1)[-1])) for t in tasks], axis=1).sum(axis=1)
+            workflow_status_df['cpu_hours'] = pd.concat([task_dfs[t.rsplit('.')[-1]]['total_time_h'] * task_dfs[t.rsplit('.')[-1]]['machine_type'].apply(lambda i: int(i.rsplit('-',1)[-1]) if ('-small' not in i and '-micro' not in i) else 1) for t in tasks], axis=1).sum(axis=1)
             workflow_status_df['start_time'] = [iso8601.parse_date(metadata_dict[i]['start']).astimezone(pytz.timezone(self.timezone)).strftime('%H:%M') for i in workflow_status_df.index]
 
         return workflow_status_df, task_dfs
@@ -1212,13 +1212,21 @@ def get_vm_cost(machine_type, preemptible=True):
         'n1-standard-8': 0.0800,  # 30  GB
         'n1-standard-16':0.1600,  # 60  GB
         'n1-standard-32':0.3200,  # 120 GB
-        'n1-standard-32':0.6400,  # 240 GB
+        'n1-standard-64':0.6400,  # 240 GB
         'n1-highmem-2':  0.0250,  # 13  GB
         'n1-highmem-4':  0.0500,  # 26  GB
         'n1-highmem-8':  0.1000,  # 52  GB
         'n1-highmem-16': 0.2000,  # 104 GB
         'n1-highmem-32': 0.4000,  # 208 GB
-        'n1-highmem-64': 0.8000   # 416 GB
+        'n1-highmem-64': 0.8000,  # 416 GB
+        'n1-highcpu-2':  0.0150,  # 1.80 GB
+        'n1-highcpu-4':  0.0300,  # 3.60 GB
+        'n1-highcpu-8':  0.0600,  # 7.20 GB
+        'n1-highcpu-16': 0.1200,  # 14.40 GB
+        'n1-highcpu-32': 0.2400,  # 28.80 GB
+        'n1-highcpu-64': 0.4800,  # 57.6 GB
+        'f1-micro':      0.0035,  # 0.6 GB
+        'g1-small':      0.0070,  # 1.7 GB
     }
 
     standard_dict = {
@@ -1234,7 +1242,15 @@ def get_vm_cost(machine_type, preemptible=True):
         'n1-highmem-8':  0.4736,
         'n1-highmem-16': 0.9472,
         'n1-highmem-32': 1.8944,
-        'n1-highmem-64': 3.7888
+        'n1-highmem-64': 3.7888,
+        'n1-highcpu-2':  0.0709,
+        'n1-highcpu-4':  0.1418,
+        'n1-highcpu-8':  0.2836,
+        'n1-highcpu-16': 0.5672,
+        'n1-highcpu-32': 1.1344,
+        'n1-highcpu-64': 2.2688,
+        'f1-micro':      0.0076,
+        'g1-small':      0.0257,
     }
 
     if preemptible:
