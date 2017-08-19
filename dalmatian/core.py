@@ -406,11 +406,18 @@ class WorkspaceManager(object):
 
             ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
             if s['submissionEntity']['entityType']=='sample_set':
-                sample_set_id = s['submissionEntity']['entityName']
-                if sample_set_id not in sample_set_dict or sample_set_dict[sample_set_id]['timestamp']<ts:
-                    assert len(r['workflows'])==1
-                    status = r['workflows'][0]['status']
-                    sample_set_dict[sample_set_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':r['workflows'][0]['workflowId']}
+                if len(r['workflows'])==1:
+                    sample_set_id = s['submissionEntity']['entityName']
+                    if sample_set_id not in sample_set_dict or sample_set_dict[sample_set_id]['timestamp']<ts:
+                        status = r['workflows'][0]['status']
+                        sample_set_dict[sample_set_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':r['workflows'][0]['workflowId']}
+                else:
+                    for w in r['workflows']:
+                        assert w['workflowEntity']['entityType']=='sample_set'
+                        sample_set_id = w['workflowEntity']['entityName']
+                        if sample_set_id not in sample_set_dict or sample_set_dict[sample_set_id]['timestamp']<ts:
+                            status = w['status']
+                            sample_set_dict[sample_set_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':w['workflowId']}
             else:
                 raise ValueError('Incompatible submission entity type: {}'.format(s['submissionEntity']['entityType']))
         print()
@@ -638,35 +645,45 @@ class WorkspaceManager(object):
                 task_name = t.rsplit('.')[-1]
                 task_dfs[task_name] = pd.DataFrame(index=workflow_status_df.index, columns=['time_h', 'total_time_h', 'max_preempt_time_h', 'machine_type', 'attempts', 'start_time', 'est_cost', 'job_ids'])
                 for i in workflow_status_df.index:
-                    task_dfs[task_name].loc[i, 'time_h'] = workflow_time(metadata_dict[i]['calls'][t][-1])/3600
+                    successes = {}
+                    preemptions = []
+
+                    if 'shardIndex' in metadata_dict[i]['calls'][t][0]:
+                        scatter = True
+                        for j in metadata_dict[i]['calls'][t]:
+                            if j['shardIndex'] in successes:
+                                preemptions.append(j)
+                            successes[j['shardIndex']] = j  # last shard (assume success follows preemptions)
+                    else:
+                        scatter = False
+                        successes[0] = metadata_dict[i]['calls'][t][-1]
+                        preemptions = metadata_dict[i]['calls'][t][:-1]
+
+                    task_dfs[task_name].loc[i, 'time_h'] = np.sum([workflow_time(j)/3600 for j in successes.values()])
 
                     # subtract time spent waiting for quota
-                    quota_time = [e for e in metadata_dict[i]['calls'][t][-1]['executionEvents'] if e['description']=='waiting for quota']
-                    if quota_time:
-                        quota_time = quota_time[0]
-                        quota_time = (convert_time(quota_time['endTime']) - convert_time(quota_time['startTime']))/3600
-                        task_dfs[task_name].loc[i, 'time_h'] -= quota_time
+                    quota_time = [e for m in successes.values() for e in m['executionEvents'] if e['description']=='waiting for quota']
+                    quota_time = [(convert_time(q['endTime']) - convert_time(q['startTime']))/3600 for q in quota_time]
+                    task_dfs[task_name].loc[i, 'time_h'] -= np.sum(quota_time)
 
-                    exec_times_h = [workflow_time(t_attempt)/3600 for t_attempt in metadata_dict[i]['calls'][t]]
-                    task_dfs[task_name].loc[i, 'total_time_h'] = np.sum(exec_times_h)
+                    total_time_h = [workflow_time(t_attempt)/3600 for t_attempt in metadata_dict[i]['calls'][t]]
+                    task_dfs[task_name].loc[i, 'total_time_h'] = np.sum(total_time_h) - np.sum(quota_time)
 
-                    task_dfs[task_name].loc[i, 'machine_type'] = metadata_dict[i]['calls'][t][-1]['jes']['machineType'].rsplit('/')[-1]  # last instance
-
-                    was_preemptible = [j['preemptible'] for j in metadata_dict[i]['calls'][t]]
-                    if was_preemptible[0]:
+                    if not np.any(['hit' in j['callCaching'] and j['callCaching']['hit'] for j in metadata_dict[i]['calls'][t]]):
+                        was_preemptible = [j['preemptible'] for j in metadata_dict[i]['calls'][t]]
+                        if len(preemptions)>0:
+                            assert was_preemptible[0]
+                            task_dfs[task_name].loc[i, 'max_preempt_time_h'] = np.max([workflow_time(t_attempt) for t_attempt in preemptions])/3600
                         task_dfs[task_name].loc[i, 'attempts'] = len(metadata_dict[i]['calls'][t])
-                    # else:
-                    #     task_dfs[task_name].loc[i, 'attempts'] = -1
 
-                    if task_dfs[task_name].loc[i, 'attempts']>1:
-                        task_dfs[task_name].loc[i, 'max_preempt_time_h'] = np.max([workflow_time(t_attempt) for t_attempt in metadata_dict[i]['calls'][t][:-1]])/3600
+                        task_dfs[task_name].loc[i, 'start_time'] = iso8601.parse_date(metadata_dict[i]['calls'][t][0]['start']).astimezone(pytz.timezone(self.timezone)).strftime('%H:%M')
 
-                    task_dfs[task_name].loc[i, 'start_time'] = iso8601.parse_date(metadata_dict[i]['calls'][t][-1]['start']).astimezone(pytz.timezone(self.timezone)).strftime('%H:%M')
+                        machine_types = [j['jes']['machineType'].rsplit('/')[-1] for j in metadata_dict[i]['calls'][t]]
+                        task_dfs[task_name].loc[i, 'machine_type'] = machine_types[-1]  # use last instance
 
-                    machine_types = [j['jes']['machineType'].rsplit('/')[-1] for j in metadata_dict[i]['calls'][t]]
-                    task_dfs[task_name].loc[i, 'est_cost'] = np.sum([get_vm_cost(m,p)*h for h,m,p in zip(exec_times_h, machine_types, was_preemptible)])
+                        task_dfs[task_name].loc[i, 'est_cost'] = np.sum([get_vm_cost(m,p)*h for h,m,p in zip(total_time_h, machine_types, was_preemptible)])
 
-                    task_dfs[task_name].loc[i, 'job_ids'] = ','.join([j['jobId'] for j in  metadata_dict[i]['calls'][t]])
+                        task_dfs[task_name].loc[i, 'job_ids'] = ','.join([j['jobId'] for j in successes.values()])
 
             # add overall cost
             workflow_status_df['est_cost'] = pd.concat([task_dfs[t.rsplit('.')[-1]]['est_cost'] for t in tasks], axis=1).sum(axis=1)
