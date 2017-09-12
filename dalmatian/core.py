@@ -134,7 +134,7 @@ class WorkspaceManager(object):
         Upload samples stored in a pandas DataFrame, and populate the required
         participant, sample, and sample_set attributes
 
-        df columns: sample_id, participant_id, {sample_set_id,} other attributes
+        df columns: sample_id (index), participant_id, {sample_set_id,} other attributes
         """
         assert df.index.name=='sample_id' and df.columns[0]=='participant_id'
 
@@ -776,7 +776,7 @@ class WorkspaceManager(object):
             for c in columns:
                 if c in s['attributes']:
                     if isinstance(s['attributes'][c], dict):
-                        df.loc[s['name'], c] = [i['entityName'] for i in s['attributes'][c]['items']]
+                        df.loc[s['name'], c] = [i['entityName'] if 'entityName' in i else i for i in s['attributes'][c]['items']]
                     else:
                         df.loc[s['name'], c] = s['attributes'][c]
         return df
@@ -803,6 +803,33 @@ class WorkspaceManager(object):
             buf.close()
             assert r.status_code==200
             print('Sample set "{}" successfully created.'.format(sample_set_id))
+
+
+    def update_super_set(self, super_set_id, sample_set_ids, sample_ids):
+        """
+        Update (or create) a set of sample sets
+
+        Defines the attribute "sample_sets_"
+
+        sample_ids: at least one 'dummy' sample is needed
+        """
+        if isinstance(sample_ids, str):
+            self.update_sample_set(super_set_id, [sample_ids])
+        else:
+            self.update_sample_set(super_set_id, sample_ids)
+
+        attr_dict = {
+            "sample_sets_": {
+                "itemsType": "EntityReference",
+                "items": [{"entityType": "sample_set", "entityName": i} for i in sample_set_ids]
+            }
+        }
+        attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+        r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample_set', super_set_id, attrs)
+        if r.status_code==200:
+            print('Set of sample sets "{}" successfully created.'.format(super_set_id))
+        else:
+            print(r.text)
 
 
     def delete_sample_set(self, sample_set_id):
