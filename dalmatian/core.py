@@ -32,7 +32,7 @@ def workflow_time(workflow):
         return np.NaN
 
 
-def _gs_get_bucket_files(bucket_id):
+def gs_list_bucket_files(bucket_id):
     """
     Get list of all files stored in bucket
     """
@@ -40,7 +40,7 @@ def _gs_get_bucket_files(bucket_id):
     return s.decode().strip().split('\n')
 
 
-def _gs_delete_list(file_list, chunk_size=500):
+def gs_delete(file_list, chunk_size=500):
     """
     Delete list of files (paths starting with gs://)
     """
@@ -52,9 +52,9 @@ def _gs_delete_list(file_list, chunk_size=500):
         subprocess.check_call(cmd, shell=True, executable='/bin/bash')
 
 
-def _gs_download(file_list, dest_dir, chunk_size=500):
+def gs_copy(file_list, dest_dir, chunk_size=500):
     """
-    Download list of files (paths starting with gs://)
+    Copy list of files (paths starting with gs://)
     """
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
@@ -852,7 +852,7 @@ class WorkspaceManager(object):
         Delete outdated files matching attribute (e.g., from prior/outdated runs)
         """
         if bucket_files is None:
-            bucket_files = _gs_get_bucket_files(self.get_bucket_id())
+            bucket_files = gs_list_bucket_files(self.get_bucket_id())
 
         if samples_df is None:
             samples_df = self.get_samples()
@@ -884,7 +884,7 @@ class WorkspaceManager(object):
 
             if s=='y':
                 print('Purging {} outdated files.'.format(len(purge_paths)))
-                _gs_delete_list(purge_paths, chunk_size=500)
+                gs_delete(purge_paths, chunk_size=500)
 
 
     def _par_delete_sample_attribute(self, args):
@@ -915,7 +915,7 @@ class WorkspaceManager(object):
                     break
             if s=='y':
                 print('Deleting {} files for attribute "{}".'.format(len(attribute_paths), attribute))
-                _gs_delete_list(attribute_paths, chunk_size=500)
+                gs_delete(attribute_paths, chunk_size=500)
 
         # delete attribute
         while True:
