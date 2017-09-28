@@ -49,7 +49,7 @@ def gs_delete(file_list, chunk_size=500):
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         cmd = 'echo -e "{}" | gsutil -m rm -I'.format('\n'.join(x))
-        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
+        subprocess.call(cmd, shell=True, executable='/bin/bash')
 
 
 def gs_copy(file_list, dest_dir, chunk_size=500):
@@ -60,6 +60,17 @@ def gs_copy(file_list, dest_dir, chunk_size=500):
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         cmd = 'echo -e "{}" | gsutil -m cp -I {}'.format('\n'.join(x), dest_dir)
+        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
+
+
+def gs_move(file_list, dest_dir, chunk_size=500):
+    """
+    Move list of files (paths starting with gs://)
+    """
+    n = int(np.ceil(len(file_list)/chunk_size))
+    for i in range(n):
+        x = file_list[chunk_size*i:chunk_size*(i+1)]
+        cmd = 'echo -e "{}" | gsutil -m mv -I {}'.format('\n'.join(x), dest_dir)
         subprocess.check_call(cmd, shell=True, executable='/bin/bash')
 
 
@@ -116,9 +127,11 @@ class WorkspaceManager(object):
 
     def delete_workspace(self):
         r = firecloud.api.delete_workspace(self.namespace, self.workspace)
-        assert r.status_code==202
-        print('Workspace {}/{} successfully deleted.'.format(self.namespace, self.workspace))
-        print('  * '+r.json()['message'])
+        if r.status_code==202:
+            print('Workspace {}/{} successfully deleted.'.format(self.namespace, self.workspace))
+            print('  * '+r.json()['message'])
+        else:
+            print(r.text)
 
 
     def get_bucket_id(self):
@@ -256,13 +269,6 @@ class WorkspaceManager(object):
             return r
 
 
-    def delete_sample_attributes(self, sample_id, attrs):
-        """
-        Delete attributes
-        """
-        self.delete_entity_attributes(self, 'sample', sample_id, attrs)
-
-
     def delete_sample_set_attributes(self, sample_set_id, attrs):
         """
         Delete attributes
@@ -303,7 +309,7 @@ class WorkspaceManager(object):
         if configuration is not None:
             submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
 
-        statuses = ['Succeeded', 'Running', 'Failed', 'Aborted', 'Submitted']
+        statuses = ['Succeeded', 'Running', 'Failed', 'Aborted', 'Submitted', 'Queued']
         df = []
         for s in submissions:
             d = {
@@ -723,6 +729,20 @@ class WorkspaceManager(object):
             print("Successfully deleted SnapshotID {}.".format(old_version))
 
 
+    def import_config(self, cnamespace, cname):
+        """
+        Import configuration from repository
+        """
+        # get latest snapshot
+        c = get_config(cnamespace, cname)
+        c = c[np.argmax([i['snapshotId'] for i in c])]
+        r = firecloud.api.copy_config_from_repo(self.namespace, self.workspace, cnamespace, cname, c['snapshotId'], cnamespace, cname)
+        if r.status_code==201:
+            print('Successfully imported configuration {} (SnapshotId {})'.format(cname, c['snapshotId']))
+        else:
+            print(r.text)
+
+
     def get_entities(self, etype, page_size=1000):
         """
         Paginated query replacing 'get_entities_tsv'
@@ -742,7 +762,7 @@ class WorkspaceManager(object):
 
         # convert to DataFrame
         df = pd.DataFrame({i['name']:i['attributes'] for i in all_entities}).T
-        df.index.name = 'sample_id'
+        df.index.name = etype+'_id'
         return df
 
 
@@ -779,6 +799,14 @@ class WorkspaceManager(object):
                         df.loc[s['name'], c] = [i['entityName'] if 'entityName' in i else i for i in s['attributes'][c]['items']]
                     else:
                         df.loc[s['name'], c] = s['attributes'][c]
+        return df
+
+
+    def get_participants(self):
+        """
+        Get DataFrame with participants and their attributes
+        """
+        df = self.get_entities('participant')
         return df
 
 
@@ -896,41 +924,24 @@ class WorkspaceManager(object):
         return sample_id, self.delete_entity_attributes('sample', sample_id, attribute, check=False)
 
 
-    def delete_attribute(self, attribute, delete_files=True, samples_df=None, processes=None):
+    def delete_sample_attributes(self, delete_s, delete_files=True):
         """
-        Delete paths stored in attribute, then delete attribute itself
+        Delete sample attributes and their associated data
+
+        delete_s: pd.Series with sample_id -> path; delete_s.name is attribute to delete
         """
-        if samples_df is None:
-            samples_df = self.get_samples()
-        attribute_paths = samples_df.loc[~pd.isnull(samples_df[attribute]), attribute].values
-        sample_ids = samples_df.loc[~pd.isnull(samples_df[attribute])].index
+
+        op = [{'attributeName':delete_s.name, 'op':'RemoveAttribute'}]
+        attrs = [{'name':i, 'entityType':'sample', 'operations': op} for i in delete_s.index]
+        r = firecloud.api.batch_update_entities(self.namespace, self.workspace, attrs)
+        if r.status_code==204:
+            print("Successfully deleted attribute '{}' for {} samples.".format(delete_s.name, len(delete_s)))
+        else:
+            print(r.text)
 
         if delete_files:
-            bucket_id = self.get_bucket_id()
-            assert np.all([i.startswith('gs://'+bucket_id) for i in attribute_paths])
-            # delete files
-            while True:
-                s = input('{} files found for attribute "{}". Delete? [y/n] '.format(len(attribute_paths), attribute)).lower()
-                if s=='n' or s=='y':
-                    break
-            if s=='y':
-                print('Deleting {} files for attribute "{}".'.format(len(attribute_paths), attribute))
-                gs_delete(attribute_paths, chunk_size=500)
-
-        # delete attribute
-        while True:
-            failed_ids = []
-            with mp.Pool(processes=processes) as pool:
-                for k,r in enumerate(pool.imap_unordered(self._par_delete_sample_attribute, [(i,attribute) for i in sample_ids])):
-                    print('\rDeleting "{}" attribute for sample {}/{}'.format(attribute, k+1,len(sample_ids)), end='')
-                    if r[1].status_code!=200:
-                        failed_ids.append(r[0])
-            if len(failed_ids)>0:
-                print('\n{} delete calls failed; re-running.'.format(len(failed_ids)))
-                sample_ids = failed_ids
-            else:
-                break
-        print('\nSuccessfully deleted attribute "{}".'.format(attribute))
+            print('Deleting files')
+            gs_delete(delete_s)
 
 
     def update_configuration(self, json_body):
@@ -1228,8 +1239,10 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
 
     # push new version
     r = firecloud.api.update_repository_method(namespace, method, synopsis, wdl_file)
-    assert r.status_code==201
-    print("Successfully pushed {}/{}. New SnapshotID: {}".format(namespace, method, r.json()['snapshotId']))
+    if r.status_code==201:
+        print("Successfully pushed {}/{}. New SnapshotID: {}".format(namespace, method, r.json()['snapshotId']))
+    else:
+        print(r.text)
 
     if public:
         print('  * setting public read access.')
