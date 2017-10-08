@@ -74,6 +74,22 @@ def gs_move(file_list, dest_dir, chunk_size=500):
         subprocess.check_call(cmd, shell=True, executable='/bin/bash')
 
 
+def gs_exists(file_list_s):
+    """
+    Check whether files exist
+    """
+    status_s = pd.Series(False, index=file_list_s.index, name='file_exists')
+    for k,(i,p) in enumerate(zip(file_list_s.index, file_list_s)):
+        print('\rChecking {}/{} files'.format(k+1, len(file_list_s)), end='')
+        try:
+            s = subprocess.check_output('gsutil -q stat {}'.format(p), shell=True)
+            status_s[i] = True
+        except subprocess.CalledProcessError as e:
+            s = e.stdout.decode()
+            print('{}: {}'.format(i, s))
+    return status_s
+
+
 class WorkspaceCollection(object):
     def __init__(self):
         self.workspace_list = []
@@ -112,17 +128,24 @@ class WorkspaceManager(object):
         self.timezone  = timezone
 
 
-    def create_workspace(self):
+    def create_workspace(self, wm=None):
         """
         Wrapper for firecloud.api.create_workspace
         """
-        r = firecloud.api.create_workspace(self.namespace, self.workspace)
-        if r.status_code==201:
-            print('Workspace {}/{} successfully created.'.format(self.namespace, self.workspace))
-        elif r.status_code==409:
-            print(r.json()['message'])
-        else:
-            print(r.json())
+        if wm is None:
+            r = firecloud.api.create_workspace(self.namespace, self.workspace)
+            if r.status_code==201:
+                print('Workspace {}/{} successfully created.'.format(self.namespace, self.workspace))
+            elif r.status_code==409:
+                print(r.json()['message'])
+            else:
+                print(r.json())
+        else:  # clone workspace
+            r = firecloud.api.clone_workspace(wm.namespace, wm.workspace, self.namespace, self.workspace)
+            if r.status_code==201:
+                print('Workspace {}/{} successfully cloned from {}/{}.'.format(self.namespace, self.workspace, wm.namespace, wm.workspace))
+            else:
+                print(r.json())
 
 
     def delete_workspace(self):
@@ -163,7 +186,7 @@ class WorkspaceManager(object):
         s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
         buf.close()
         assert s.status_code==200
-        print('Succesfully imported participants.')
+        print('Succesfully imported {} participants.'.format(participant_df.shape[0]))
 
         # 2) upload samples
         sample_df = df[df.columns[df.columns!='sample_set_id']].copy()
@@ -173,7 +196,7 @@ class WorkspaceManager(object):
         s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
         buf.close()
         assert s.status_code==200
-        print('Succesfully imported samples.')
+        print('Succesfully imported {} samples.'.format(sample_df.shape[0]))
 
         # 3 upload sample sets
         if 'sample_set_id' in df.columns:
@@ -185,7 +208,7 @@ class WorkspaceManager(object):
             s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
             buf.close()
             assert s.status_code==200
-            print('Succesfully imported sample sets.')
+            print('Succesfully imported {} sample sets.'.format(set_df.shape[0]))
 
         if add_participant_samples:
             # 4) add participant.samples_
@@ -451,7 +474,10 @@ class WorkspaceManager(object):
             # get list of all samples in workspace
             print('Fetching sample status ...')
             samples_df = self.get_samples()
-            incomplete_df = samples_df[samples_df[columns].isnull().any(axis=1)]
+            if len(np.intersect1d(columns, samples_df.columns))>0:
+                incomplete_df = samples_df[samples_df[columns].isnull().any(axis=1)]
+            else:
+                incomplete_df = pd.DataFrame(index=samples_df.index, columns=columns)
 
             # get workflow status for all submissions
             sample_status_df = self.get_sample_status(configuration)
@@ -522,10 +548,12 @@ class WorkspaceManager(object):
         print('Completed patching {} attributes in {}/{}'.format(entity, self.namespace, self.workspace))
 
 
-    def display_status(self, configuration, entity='sample'):
+    def display_status(self, configuration, entity='sample', filter_active=True):
         """
+        Display summary of task statuses
         """
-        status_df = self.get_submission_status(configuration)
+        # workflow status for each sample (from latest/current run)
+        status_df = self.get_sample_status(configuration)
 
         # get workflow details from 1st submission
         metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, status_df['submission_id'][0], status_df['workflow_id'][0])
@@ -534,20 +562,26 @@ class WorkspaceManager(object):
 
         workflow_tasks = list(metadata['calls'].keys())
 
-        fail_idx = status_df[status_df['status']!='Succeeded'].index
-        n_success = status_df.shape[0] - len(fail_idx)
+        print(status_df['status'].value_counts())
+        if filter_active:
+            ix = status_df[status_df['status']!='Succeeded'].index
+        else:
+            ix = status_df.index
 
-        state_df = pd.DataFrame(0, index=fail_idx, columns=workflow_tasks)
-        status_code = {'Running':1, 'Done':2, 'Failed':-1}
-        for i in fail_idx:
+        state_df = pd.DataFrame(0, index=ix, columns=workflow_tasks)
+        for k,i in enumerate(ix):
+            print('\rFetching metadata for sample {}/{}'.format(k+1, len(ix)), end='')
             metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, status_df.loc[i, 'submission_id'], status_df.loc[i, 'workflow_id'])
             assert metadata.status_code==200
             metadata = metadata.json()
-            state_df.loc[i] = [status_code[metadata['calls'][t][-1]['executionStatus']] if t in metadata['calls'] else 0 for t in workflow_tasks]
+            state_df.loc[i] = [metadata['calls'][t][-1]['executionStatus'] if t in metadata['calls'] else 'Waiting' for t in workflow_tasks]
+        print()
         state_df.rename(columns={i:i.split('.')[1] for i in state_df.columns}, inplace=True)
-        state_df[['workflow_id', 'submission_id']] = status_df.loc[fail_idx, ['workflow_id', 'submission_id']]
+        summary_df = pd.concat([state_df[c].value_counts() for c in state_df], axis=1).fillna(0).astype(int)
+        print(summary_df)
+        state_df[['workflow_id', 'submission_id']] = status_df.loc[ix, ['workflow_id', 'submission_id']]
 
-        return state_df
+        return state_df, summary_df
 
 
     def get_stderr(self, state_df, task_name):
@@ -822,7 +856,7 @@ class WorkspaceManager(object):
             attrs = [{'addUpdateAttribute': items_dict, 'attributeName': 'samples', 'op': 'AddUpdateAttribute'}]
             r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample_set', sample_set_id, attrs)
             assert r.status_code==200
-            print('Sample set "{}" successfully updated.'.format(sample_set_id))
+            print('Sample set "{}" ({} samples) successfully updated.'.format(sample_set_id, len(sample_ids)))
         else:  # create
             set_df = pd.DataFrame(data=np.c_[[sample_set_id]*len(sample_ids), sample_ids], columns=['membership:sample_set_id', 'sample_id'])
             buf = io.StringIO()
@@ -830,7 +864,7 @@ class WorkspaceManager(object):
             r = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
             buf.close()
             assert r.status_code==200
-            print('Sample set "{}" successfully created.'.format(sample_set_id))
+            print('Sample set "{}" ({} samples) successfully created.'.format(sample_set_id, len(sample_ids)))
 
 
     def update_super_set(self, super_set_id, sample_set_ids, sample_ids):
@@ -924,15 +958,14 @@ class WorkspaceManager(object):
         return sample_id, self.delete_entity_attributes('sample', sample_id, attribute, check=False)
 
 
-    def delete_sample_attributes(self, delete_s, delete_files=True):
+    def delete_entity_attributes(self, delete_s, etype, delete_files=False):
         """
         Delete sample attributes and their associated data
 
         delete_s: pd.Series with sample_id -> path; delete_s.name is attribute to delete
         """
-
         op = [{'attributeName':delete_s.name, 'op':'RemoveAttribute'}]
-        attrs = [{'name':i, 'entityType':'sample', 'operations': op} for i in delete_s.index]
+        attrs = [{'name':i, 'entityType':etype, 'operations': op} for i in delete_s.index]
         r = firecloud.api.batch_update_entities(self.namespace, self.workspace, attrs)
         if r.status_code==204:
             print("Successfully deleted attribute '{}' for {} samples.".format(delete_s.name, len(delete_s)))
@@ -1014,8 +1047,7 @@ class WorkspaceManager(object):
         if r.status_code==201:
             print('Successfully created submission {}.'.format(r.json()['submissionId']))
         else:
-            print('Submission failed.')
-            return r
+            print(r.text)
 
 
 #------------------------------------------------------------------------------
