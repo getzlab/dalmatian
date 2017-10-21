@@ -77,6 +77,8 @@ def gs_move(file_list, dest_dir, chunk_size=500):
 def gs_exists(file_list_s):
     """
     Check whether files exist
+
+    file_list_s: pd.Series
     """
     status_s = pd.Series(False, index=file_list_s.index, name='file_exists')
     for k,(i,p) in enumerate(zip(file_list_s.index, file_list_s)):
@@ -88,6 +90,17 @@ def gs_exists(file_list_s):
             s = e.stdout.decode()
             print('{}: {}'.format(i, s))
     return status_s
+
+
+def gs_size(file_list_s):
+    """
+    Get file sizes
+
+    file_list_s: pd.Series
+    """
+    s = subprocess.check_output('gsutil du '+' '.join(file_list_s), shell=True)
+    s = s.decode().strip().split('\n')
+    return pd.Series([int(i.split()[0]) for i in s], index=file_list_s.index, name='size_bytes')
 
 
 class WorkspaceCollection(object):
@@ -260,7 +273,10 @@ class WorkspaceManager(object):
         """
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
         r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, attrs)
-        assert r.status_code==200
+        if r.status_code==200:
+            print('Successfully updated {}.'.format(ename))
+        else:
+            print(r.text)
 
 
     def update_sample_attributes(self, sample_id, attr_dict):
@@ -459,8 +475,8 @@ class WorkspaceManager(object):
 
     def patch_attributes(self, cnamespace, configuration, dry_run=False, entity='sample'):
         """
-        Patch attributes for all samples/tasks that run successfully but were not written to database
-        This includes outputs from successful tasks in workflows that failed
+        Patch attributes for all samples/tasks that run successfully but were not written to database.
+        This includes outputs from successful tasks in workflows that failed.
         """
 
         # get list of expected outputs
@@ -1275,6 +1291,7 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
         print("Successfully pushed {}/{}. New SnapshotID: {}".format(namespace, method, r.json()['snapshotId']))
     else:
         print(r.text)
+        raise ValueError('Update failed.')
 
     if public:
         print('  * setting public read access.')
