@@ -94,13 +94,16 @@ def gs_exists(file_list_s):
 
 def gs_size(file_list_s):
     """
-    Get file sizes
+    Get file sizes (in bytes)
 
     file_list_s: pd.Series
     """
-    s = subprocess.check_output('gsutil du '+' '.join(file_list_s), shell=True)
-    s = s.decode().strip().split('\n')
-    return pd.Series([int(i.split()[0]) for i in s], index=file_list_s.index, name='size_bytes')
+    prefix = os.path.commonprefix(file_list_s.tolist())
+    s = subprocess.check_output('gsutil ls -l {}**'.format(prefix), shell=True, executable='/bin/bash')
+    gs_sizes = s.decode().strip().split('\n')[:-1]
+    gs_sizes = pd.Series([np.int64(i.split()[0]) for i in gs_sizes], index=[i.split()[-1] for i in gs_sizes])
+    gs_sizes.index.name = 'path'
+    return pd.Series(gs_sizes[file_list_s].values, index=file_list_s.index, name='size_bytes')
 
 
 class WorkspaceCollection(object):
@@ -198,8 +201,11 @@ class WorkspaceManager(object):
         participant_df.to_csv(buf, sep='\t', index=participant_df.index.name=='entity:participant_id')
         s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
         buf.close()
-        assert s.status_code==200
-        print('Succesfully imported {} participants.'.format(participant_df.shape[0]))
+        if s.status_code==200:
+            print('Successfully imported {} participants.'.format(participant_df.shape[0]))
+        else:
+            print(s.text)
+            raise ValueError('Participant import failed.')
 
         # 2) upload samples
         sample_df = df[df.columns[df.columns!='sample_set_id']].copy()
@@ -209,7 +215,7 @@ class WorkspaceManager(object):
         s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
         buf.close()
         assert s.status_code==200
-        print('Succesfully imported {} samples.'.format(sample_df.shape[0]))
+        print('Successfully imported {} samples.'.format(sample_df.shape[0]))
 
         # 3 upload sample sets
         if 'sample_set_id' in df.columns:
@@ -221,7 +227,7 @@ class WorkspaceManager(object):
             s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
             buf.close()
             assert s.status_code==200
-            print('Succesfully imported {} sample sets.'.format(set_df.shape[0]))
+            print('Successfully imported {} sample sets.'.format(len(df['sample_set_id'].unique())))
 
         if add_participant_samples:
             # 4) add participant.samples_
@@ -231,10 +237,7 @@ class WorkspaceManager(object):
 
     def upload_participants(self, participant_ids):
         """
-        Upload samples stored in a pandas DataFrame, and populate the required
-        participant, sample, and sample_set attributes
-
-        df columns: sample_id, participant_id, {sample_set_id,} other attributes
+        Upload a list of participants IDs
         """
         participant_df = pd.DataFrame(data=np.unique(participant_ids), columns=['entity:participant_id'])
         buf = io.StringIO()
@@ -242,7 +245,7 @@ class WorkspaceManager(object):
         s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
         buf.close()
         assert s.status_code==200
-        print('Succesfully imported participants.')
+        print('Successfully imported participants.')
 
 
     def update_participant_samples(self):
@@ -680,9 +683,12 @@ class WorkspaceManager(object):
         metadata_dict = {}
         for k,(i,row) in enumerate(status_df.iterrows()):
             print('\rFetching metadata {}/{}'.format(k+1,status_df.shape[0]), end='')
-            metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, row['submission_id'], row['workflow_id'])
-            assert metadata.status_code==200
-            metadata_dict[i] = metadata.json()
+            fetch = True
+            while fetch:  # improperly dealing with 500s here...
+                metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, row['submission_id'], row['workflow_id'])
+                if metadata.status_code==200:
+                     metadata_dict[i] = metadata.json()
+                     fetch = False
 
         # if workflow_name is None:
             # split output by workflow
@@ -744,7 +750,7 @@ class WorkspaceManager(object):
             # add overall cost
             workflow_status_df['est_cost'] = pd.concat([task_dfs[t.rsplit('.')[-1]]['est_cost'] for t in tasks], axis=1).sum(axis=1)
             workflow_status_df['time_h'] = [workflow_time(metadata_dict[i])/3600 for i in workflow_status_df.index]
-            workflow_status_df['cpu_hours'] = pd.concat([task_dfs[t.rsplit('.')[-1]]['total_time_h'] * task_dfs[t.rsplit('.')[-1]]['machine_type'].apply(lambda i: int(i.rsplit('-',1)[-1]) if ('-small' not in i and '-micro' not in i) else 1) for t in tasks], axis=1).sum(axis=1)
+            workflow_status_df['cpu_hours'] = pd.concat([task_dfs[t.rsplit('.')[-1]]['total_time_h'] * task_dfs[t.rsplit('.')[-1]]['machine_type'].apply(lambda i: int(i.rsplit('-',1)[-1]) if (pd.notnull(i) and '-small' not in i and '-micro' not in i) else 1) for t in tasks], axis=1).sum(axis=1)
             workflow_status_df['start_time'] = [iso8601.parse_date(metadata_dict[i]['start']).astimezone(pytz.timezone(self.timezone)).strftime('%H:%M') for i in workflow_status_df.index]
 
         return workflow_status_df, task_dfs
@@ -881,6 +887,22 @@ class WorkspaceManager(object):
             buf.close()
             assert r.status_code==200
             print('Sample set "{}" ({} samples) successfully created.'.format(sample_set_id, len(sample_ids)))
+
+
+    def update_participant_set(self, participant_set_id, participant_ids):
+        """
+        """
+        r = firecloud.api.get_entity(self.namespace, self.workspace, 'participant_set', participant_set_id)
+        if r.status_code==200:  # exists -> update
+            pass
+        else:  # create
+            set_df = pd.DataFrame(data=np.c_[[participant_set_id]*len(participant_ids), participant_ids], columns=['membership:participant_set_id', 'participant_id'])
+            buf = io.StringIO()
+            set_df.to_csv(buf, sep='\t', index=False)
+            r = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
+            buf.close()
+            assert r.status_code==200
+            print('Participant set "{}" ({} participants) successfully created.'.format(participant_set_id, len(participant_ids)))
 
 
     def update_super_set(self, super_set_id, sample_set_ids, sample_ids):
@@ -1363,6 +1385,7 @@ def get_vm_cost(machine_type, preemptible=True):
         return preemptible_dict[machine_type]
     else:
         return standard_dict[machine_type]
+
 
 def main(argv=None):
     if not argv:
