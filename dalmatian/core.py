@@ -7,16 +7,74 @@ from collections import Iterable
 import pandas as pd
 import numpy as np
 import firecloud.api
+from firecloud import fiss
 import iso8601
 import pytz
-import matplotlib.pyplot as plt
 from collections import defaultdict
-import multiprocessing as mp
 import argparse
 
 from .__about__ import __version__
 
 # Collection of high-level wrapper functions for FireCloud API
+
+#------------------------------------------------------------------------------
+#  Extension of firecloud.api functionality using the rawls (internal) API
+#------------------------------------------------------------------------------
+def _batch_update_entities(namespace, workspace, json_body):
+    """ Batch update entity attributes in a workspace.
+
+    Args:
+        namespace (str): project to which workspace belongs
+        workspace (str): Workspace name
+        json_body (list(dict)):
+        [{
+            "name": "string",
+            "entityType": "string",
+            "operations": (list(dict))
+        }]
+
+        operations:
+        [{
+          "op": "AddUpdateAttribute",
+          "attributeName": "string",
+          "addUpdateAttribute": "string"
+        },
+        {
+          "op": "RemoveAttribute",
+          "attributeName": "string"
+        },
+        {
+          "op": "AddListMember",
+          "attributeListName": "string",
+          "newMember": "string"
+        },
+        {
+          "op": "RemoveListMember",
+          "attributeListName": "string",
+          "removeMember": "string"
+        },
+        {
+          "op": "CreateAttributeEntityReferenceList",
+          "attributeListName": "string"
+        },
+        {
+          "op": "CreateAttributeValueList",
+          "attributeListName": "string"
+        }]
+
+    Swagger:
+        https://rawls.dsde-prod.broadinstitute.org/#!/entities/batch_update_entities
+    """
+    headers = firecloud.api._fiss_agent_header({"Content-type":  "application/json"})
+    uri = "{0}workspaces/{1}/{2}/entities/batchUpdate".format(
+        'https://rawls.dsde-prod.broadinstitute.org/api/', namespace, workspace)
+
+    return firecloud.api.__post(uri, headers=headers, json=json_body)
+
+
+#------------------------------------------------------------------------------
+#  Helper functions for processing timestamps
+#------------------------------------------------------------------------------
 
 def convert_time(x):
     return datetime.timestamp(iso8601.parse_date(x))
@@ -31,6 +89,10 @@ def workflow_time(workflow):
     else:
         return np.NaN
 
+
+#------------------------------------------------------------------------------
+#  Wrapper functions for gsutil calls
+#------------------------------------------------------------------------------
 
 def gs_list_bucket_files(bucket_id):
     """
@@ -106,6 +168,10 @@ def gs_size(file_list_s):
     return pd.Series(gs_sizes[file_list_s].values, index=file_list_s.index, name='size_bytes')
 
 
+#------------------------------------------------------------------------------
+#  Top-level classes (representing workspaces)
+#------------------------------------------------------------------------------
+
 class WorkspaceCollection(object):
     def __init__(self):
         self.workspace_list = []
@@ -155,13 +221,13 @@ class WorkspaceManager(object):
             elif r.status_code==409:
                 print(r.json()['message'])
             else:
-                print(r.json())
+                print(r.text)
         else:  # clone workspace
             r = firecloud.api.clone_workspace(wm.namespace, wm.workspace, self.namespace, self.workspace)
             if r.status_code==201:
                 print('Workspace {}/{} successfully cloned from {}/{}.'.format(self.namespace, self.workspace, wm.namespace, wm.workspace))
             else:
-                print(r.json())
+                print(r.text)
 
 
     def delete_workspace(self):
@@ -214,8 +280,11 @@ class WorkspaceManager(object):
         sample_df.to_csv(buf, sep='\t')
         s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
         buf.close()
-        assert s.status_code==200
-        print('Successfully imported {} samples.'.format(sample_df.shape[0]))
+        if s.status_code==200:
+            print('Successfully imported {} samples.'.format(sample_df.shape[0]))
+        else:
+            print(s.text)
+            raise ValueError('Sample import failed.')
 
         # 3 upload sample sets
         if 'sample_set_id' in df.columns:
@@ -270,45 +339,18 @@ class WorkspaceManager(object):
         print('\n    Finished updating participants in {}/{}'.format(self.namespace, self.workspace))
 
 
-    def update_entity_attributes(self, etype, ename, attr_dict):
+    def update_sample_attributes(self, sample_id, attrs):
         """
-        Set or update attributes in attr_dict
+        Set or update attributes in attrs (pd.Series or pd.DataFrame)
         """
-        attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-        r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, attrs)
-        if r.status_code==200:
-            print('Successfully updated {}.'.format(ename))
-        else:
-            print(r.text)
+        self.update_entity_attributes('sample', attrs)
 
 
-    def update_sample_attributes(self, sample_id, attr_dict):
+    def update_sample_set_attributes(self, sample_set_id, attrs):
         """
-        Set or update attributes in attr_dict
+        Set or update attributes in attrs (pd.Series or pd.DataFrame)
         """
-        self.update_entity_attributes('sample', sample_id, attr_dict)
-
-
-    def update_sample_set_attributes(self, sample_set_id, attr_dict):
-        """
-        Set or update attributes in attr_dict
-        """
-        self.update_entity_attributes('sample_set', sample_set_id, attr_dict)
-
-
-    def delete_entity_attributes(self, etype, ename, attrs, check=True):
-        """
-        Delete attributes
-        """
-        if isinstance(attrs, str):
-            rm_list = [{"op": "RemoveAttribute", "attributeName": attrs}]
-        elif isinstance(attrs, Iterable):
-            rm_list = [{"op": "RemoveAttribute", "attributeName": i} for i in attrs]
-        r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, rm_list)
-        if check:
-            assert r.status_code==200
-        else:
-            return r
+        self.update_entity_attributes('sample_set', attrs)
 
 
     def delete_sample_set_attributes(self, sample_set_id, attrs):
@@ -791,10 +833,12 @@ class WorkspaceManager(object):
         """
         # get latest snapshot
         c = get_config(cnamespace, cname)
+        if len(c)==0:
+            raise ValueError('Configuration "{}/{}" not found (name must match exactly).'.format(cnamespace, cname))
         c = c[np.argmax([i['snapshotId'] for i in c])]
         r = firecloud.api.copy_config_from_repo(self.namespace, self.workspace, cnamespace, cname, c['snapshotId'], cnamespace, cname)
         if r.status_code==201:
-            print('Successfully imported configuration {} (SnapshotId {})'.format(cname, c['snapshotId']))
+            print('Successfully imported configuration "{}/{}" (SnapshotId {})'.format(cnamespace, cname, c['snapshotId']))
         else:
             print(r.text)
 
@@ -877,8 +921,10 @@ class WorkspaceManager(object):
             items_dict['items'] = [{'entityName': i, 'entityType': 'sample'} for i in sample_ids]
             attrs = [{'addUpdateAttribute': items_dict, 'attributeName': 'samples', 'op': 'AddUpdateAttribute'}]
             r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample_set', sample_set_id, attrs)
-            assert r.status_code==200
-            print('Sample set "{}" ({} samples) successfully updated.'.format(sample_set_id, len(sample_ids)))
+            if r.status_code==200:
+                print('Sample set "{}" ({} samples) successfully updated.'.format(sample_set_id, len(sample_ids)))
+            else:
+                print(r.text)
         else:  # create
             set_df = pd.DataFrame(data=np.c_[[sample_set_id]*len(sample_ids), sample_ids], columns=['membership:sample_set_id', 'sample_id'])
             buf = io.StringIO()
@@ -987,13 +1033,60 @@ class WorkspaceManager(object):
                 gs_delete(purge_paths, chunk_size=500)
 
 
-    def _par_delete_sample_attribute(self, args):
+    def update_entity_attributes(self, etype, attrs):
         """
-        Wrapper for parallelized calls to delete_entity_attributes
+
+        Use cases:
+          - update specific attribute, for specific entity
+          - update specific attribute for multiple entities
+
+
+        update_df:  columns: sample_set_ids, rows: attributes
+
+
+          update attributes for specific sample set -or-
+          update specific attribute for multiple sample sets
+
+        Create or update attribute
+
+        update_s: pd.Series with id -> attribute; update_s.name is attribute to update
         """
-        sample_id = args[0]
-        attribute = args[1]
-        return sample_id, self.delete_entity_attributes('sample', sample_id, attribute, check=False)
+        # try rawls batch call if available
+        if isinstance(attrs, pd.DataFrame):
+            attr_list = []
+            for i,row in attrs.iterrows():
+                attr_list.extend(
+                    [{'name':row.name, 'entityType':etype, 'operations': [{"op": "AddUpdateAttribute", "attributeName": i, "addUpdateAttribute":str(j)}]} for i,j in row.iteritems()]
+                )
+        elif isinstance(attrs, pd.Series):
+            attr_list = [{'name':i, 'entityType':etype, 'operations': [{"op": "AddUpdateAttribute", "attributeName":attrs.name, "addUpdateAttribute":str(j)}]} for i,j in attrs.iteritems()]
+        else:
+            raise ValueError('Unsupported input format.')
+
+        r = _batch_update_entities(self.namespace, self.workspace, attr_list)
+        # try:  # TODO
+        if r.status_code==204:
+            if isinstance(attrs, pd.DataFrame):
+                print("Successfully updated attributes '{}' for {} {}s.".format(attrs.columns.tolist(), attrs.shape[0], etype))
+            elif isinstance(attrs, pd.Series):
+                print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
+            else:
+                print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
+        else:
+            print(r.text)
+
+        # # revert to public API:
+        # def update_entity_attributes(self, etype, ename, attr_dict):
+        #     """
+        #     Set or update attributes in attr_dict
+        #     """
+        #     attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+        #     r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, attrs)
+        #     if r.status_code==200:
+        #         print('Successfully updated {}.'.format(ename))
+        #     else:
+        #         print(r.text)
+        #
 
 
     def delete_entity_attributes(self, delete_s, etype, delete_files=False):
@@ -1004,15 +1097,44 @@ class WorkspaceManager(object):
         """
         op = [{'attributeName':delete_s.name, 'op':'RemoveAttribute'}]
         attrs = [{'name':i, 'entityType':etype, 'operations': op} for i in delete_s.index]
-        r = firecloud.api.batch_update_entities(self.namespace, self.workspace, attrs)
+        r = _batch_update_entities(self.namespace, self.workspace, attrs)
         if r.status_code==204:
             print("Successfully deleted attribute '{}' for {} samples.".format(delete_s.name, len(delete_s)))
+
+            if delete_files:
+                print('Deleting files')
+                gs_delete(delete_s)
         else:
             print(r.text)
 
-        if delete_files:
-            print('Deleting files')
-            gs_delete(delete_s)
+    # def delete_entity_attributes(self, etype, ename, attrs, check=True):
+    #     """
+    #     Delete attributes
+    #     """
+    #     if isinstance(attrs, str):
+    #         rm_list = [{"op": "RemoveAttribute", "attributeName": attrs}]
+    #     elif isinstance(attrs, Iterable):
+    #         rm_list = [{"op": "RemoveAttribute", "attributeName": i} for i in attrs]
+    #     r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, rm_list)
+    #     if check:
+    #         assert r.status_code==200
+    #     else:
+    #         return r
+
+
+    # def delete_samples(self, sample_ids):
+    #     """
+    #     Delete sample or list of samples
+    #     """
+    #     r = firecloud.api.delete_sample(self.namespace, self.workspace, sample_ids)
+    #
+    # IF LAST SAMPLE, ALSO NEED TO DELETE PARTICIPANT
+    #
+    # def delete_participants(self, participant_ids):
+    #     """
+    #     Delete participant or list of participants
+    #     """
+    #     r = firecloud.api.delete_participant(self.namespace, self.workspace, participant_ids)
 
 
     def update_configuration(self, json_body):
@@ -1025,7 +1147,6 @@ class WorkspaceManager(object):
            'rootEntityType' : entity,
            'methodRepoMethod': {'methodName':method_name, 'methodNamespace':method_namespace, 'methodVersion':version},
            'methodNamespace': method_namespace,
-           'methodConfigVersion':1,
            'inputs':  {},
            'outputs': {},
            'prerequisites': {},
@@ -1037,13 +1158,16 @@ class WorkspaceManager(object):
         if json_body['name'] not in [m['name'] for m in r.json()]:
             # configuration doesn't exist -> name, namespace specified in json_body
             r = firecloud.api.create_workspace_config(self.namespace, self.workspace, json_body)
-            assert r.status_code==201
-            print('Successfully added configuration: {}'.format(json_body['name']))
+            if r.status_code==201:
+                print('Successfully added configuration: {}'.format(json_body['name']))
+            else:
+                print(r.text)
         else:
             r = firecloud.api.update_workspace_config(self.namespace, self.workspace, json_body['namespace'], json_body['name'], json_body)
-            assert r.status_code==200
-            print('Successfully updated configuration: {}'.format(json_body['name']))
-        return r
+            if r.status_code==200:
+                print('Successfully updated configuration: {}'.format(json_body['name']))
+            else:
+                print(r.text)
 
 
     def check_configuration(self, config_name):
@@ -1277,6 +1401,7 @@ def compare_wdl(mnamespace, mname, wdl_path):
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
     d = subprocess.run(cmd, shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
     print(d.stdout.decode())
+
 
 def redact_outdated_method_versions(method_namespace, method_name):
     """
