@@ -168,6 +168,18 @@ def gs_size(file_list_s):
     return pd.Series(gs_sizes[file_list_s].values, index=file_list_s.index, name='size_bytes')
 
 
+def get_md5hash(file_path):
+    """
+    Calculate MD5 hash using gsutil or md5sum depending on location
+    """
+    if file_path.startswith('gs://'):
+        s = subprocess.check_output('gsutil hash -m -h '+file_path, shell=True).decode().strip().split('\n')
+        s = [i for i in s if 'md5' in i][0]
+        return s.split()[-1]
+    else:
+        return subprocess.check_output('md5sum '+file_path, shell=True).decode().split()[0]
+
+
 #------------------------------------------------------------------------------
 #  Top-level classes (representing workspaces)
 #------------------------------------------------------------------------------
@@ -709,10 +721,8 @@ class WorkspaceManager(object):
         Pricing: $0.026/GB/month (multi-regional)
                  $0.02/GB/month (regional)
         """
-        r = firecloud.api.get_workspace(self.namespace, self.workspace)
-        assert r.status_code==200
-        r = r.json()
-        s = subprocess.check_output('gsutil du -s gs://'+r['workspace']['bucketName'], shell=True, executable='/bin/bash')
+        bucket_id = self.get_bucket_id()
+        s = subprocess.check_output('gsutil du -s gs://'+bucket_id, shell=True, executable='/bin/bash')
         return np.float64(s.decode().split()[0])/1024**4
 
 
