@@ -12,6 +12,7 @@ import iso8601
 import pytz
 from collections import defaultdict
 import argparse
+import multiprocessing as mp
 
 from .__about__ import __version__
 
@@ -178,6 +179,15 @@ def get_md5hash(file_path):
         return s.split()[-1]
     else:
         return subprocess.check_output('md5sum '+file_path, shell=True).decode().split()[0]
+
+
+def get_md5hashes(file_list_s, num_threads=10):
+    md5_hashes = []
+    with mp.Pool(processes=num_threads) as pool:
+        for k,r in enumerate(pool.imap(get_md5hash, [i for i in file_list_s])):
+            print('\rCalculating MD5 hash for file {}/{}'.format(k+1,len(file_list_s)), end='')
+            md5_hashes.append(r)
+    return md5_hashes
 
 
 #------------------------------------------------------------------------------
