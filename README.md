@@ -18,6 +18,73 @@ FireCloud uses the Google Cloud SDK (https://cloud.google.com/sdk/) to manage au
 gcloud auth application-default login
 
 ```
+### Examples
+Dalmatian provides the WorkspaceManager class for interacting with FireCloud workspaces.
+```
+import dalmatian
+wm = dalmatian.WorkspaceManager(namespace, workspace)
+```
+
+Create the workspace:
+```
+wm.create_workspace()
+```
+
+Upload samples and sample attributes (e.g., BAM paths). The attributes must be provided as a pandas DataFrame, in the following form:
+ * the index must be named 'sample_id', and contain the sample IDs
+ * the dataframe must contain the column 'participant_id'
+ * if a 'sample_set_id' columns is provided, the corresponding sample sets will be generated
+```
+wm.upload_samples(attributes_df, add_participant_samples=True)
+```
+If `add_participant_samples=True`, all samples of a participant are stored in `participant.samples_`. 
+
+Add or update workspace attributes:
+```
+attr = {
+    'attribute_name':'gs://attribute_path',
+}
+wm.update_attributes(attr)
+```
+
+Get attributes on samples, sample sets, participants:
+```
+samples_df = wm.get_samples()
+sets_df = wm.get_sample_sets()
+participants_df = wm.get_participants()
+```
+
+Create or update sets:
+```
+wm.update_sample_set('all_samples', samples_df.index)
+wm.update_participant_set('all_participants', participant_df.index)
+```
+
+Submit jobs:
+```
+wm.create_submission(config_namespace, config_name, sample_id, 'sample', use_callcache=True)
+wm.create_submission(config_namespace, config_name, sample_set_id, 'sample_set', expression=this.samples, use_callcache=True)
+wm.create_submission(config_namespace, config_name, participant_id, 'participant', expression=this.samples_, use_callcache=True)
+```
+
+Monitor jobs:
+```
+wm.get_submission_status()
+```
+
+Get runtime statistics (including cost estimates):
+```
+status_df = wm.get_sample_status(config_name)
+workflow_status_df, task_dfs = wm.get_stats(status_df)
+```
+
+Copy/move data from workspace:
+```
+samples_df = wm.get_samples()
+dalmatian.gs_copy(samples_df[attibute_name], dest_path)
+dalmatian.gs_move(samples_df[attibute_name], dest_path)
+```
+
 
 ### Contents
 
