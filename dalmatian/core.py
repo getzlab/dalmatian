@@ -462,30 +462,13 @@ class WorkspaceManager(object):
             r = r.json()
 
             ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
-            if s['submissionEntity']['entityType']=='sample':
-                sample_id = s['submissionEntity']['entityName']
-                if sample_id not in sample_dict or sample_dict[sample_id]['timestamp']<ts:
-                    status = r['workflows'][0]['status']
-                    sample_dict[sample_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':r['workflows'][0]['workflowId']}
-            elif s['submissionEntity']['entityType']=='sample_set':
-                if len(r['workflows'])==1:
-                    sample_id = s['submissionEntity']['entityName']
-                    if sample_id not in sample_dict or sample_dict[sample_id]['timestamp']<ts:
-                        status = r['workflows'][0]['status']
-                        sample_dict[sample_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':r['workflows'][0]['workflowId']}
-                else:
-                    for w in r['workflows']:
-                        sample_id = w['workflowEntity']['entityName']
-                        if sample_id not in sample_dict or sample_dict[sample_id]['timestamp']<ts:
-                            if 'workflowId' in w:
-                                sample_dict[sample_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':w['workflowId']}
-                            else:
-                                sample_dict[sample_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':'NA'}
-            elif s['submissionEntity']['entityType']=='participant':
-                participant_id = s['submissionEntity']['entityName']
-                if participant_id not in sample_dict or sample_dict[participant_id]['timestamp']<ts:
-                    status = r['workflows'][0]['status']
-                    sample_dict[participant_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':r['workflows'][0]['workflowId']}
+            for w in r['workflows']:
+                entity_id = w['workflowEntity']['entityName']
+                if entity_id not in sample_dict or sample_dict[entity_id]['timestamp']<ts:
+                    if 'workflowId' in w:
+                        sample_dict[entity_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':w['workflowId']}
+                    else:
+                        sample_dict[entity_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':'NA'}
 
         status_df = pd.DataFrame(sample_dict).T
         status_df.index.name = 'sample_id'
