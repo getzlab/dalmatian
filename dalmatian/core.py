@@ -403,6 +403,7 @@ class WorkspaceManager(object):
             attr.pop(k)
         return attr
 
+
     def get_sample_attributes_in_set(self, set):
         """
         Get sample attributes of samples in a set
@@ -413,7 +414,8 @@ class WorkspaceManager(object):
         for s in samples:
             idx[all_samples == s] = True
         return self.get_samples()[idx]
-    
+
+
     def get_submission_status(self, filter_active=False, configuration=None, show_namespaces=False):
         """
         Get status of all submissions in the workspace (replicates UI Monitor)
@@ -454,7 +456,7 @@ class WorkspaceManager(object):
         Get metadata JSON for a specific workflow
         """
         metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, submission_id, workflow_id)
-        assert metadata.status_code==200:
+        assert metadata.status_code==200
         return metadata.json()
 
 
