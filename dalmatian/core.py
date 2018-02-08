@@ -413,7 +413,7 @@ class WorkspaceManager(object):
         for s in samples:
             idx[all_samples == s] = True
         return self.get_samples()[idx]
-    
+
     def get_submission_status(self, filter_active=False, configuration=None, show_namespaces=False):
         """
         Get status of all submissions in the workspace (replicates UI Monitor)
@@ -890,6 +890,18 @@ class WorkspaceManager(object):
         df['participant'] = df['participant'].apply(lambda x: x['entityName'])
         return df
 
+    def get_pairs(self):
+        """
+        Get DataFrame with pairs and their attributes
+        """
+
+        df = self.get_entities('pair')
+        df['participant'] = df['participant'].apply(lambda x: x['entityName'])
+        df['case_sample'] = df['case_sample'].apply(lambda  x: x['entityName'])
+        df['control_sample'] = df['control_sample'].apply(lambda x: x['entityName'])
+        return df
+
+
 
     def get_sample_sets(self, pattern=None):
         """
@@ -947,6 +959,29 @@ class WorkspaceManager(object):
             assert r.status_code==200
             print('Sample set "{}" ({} samples) successfully created.'.format(sample_set_id, len(sample_ids)))
 
+    def update_pair_set(self, pair_set_id, pair_ids):
+        """
+        Update (or create) a pair set
+        """
+        r = firecloud.api.get_entity(self.namespace, self.workspace, 'pair_set_id', pair_set_id)
+        if r.status_code==200:  # exists -> update
+            r = r.json()
+            items_dict = r['attributes']['pairs']
+            items_dict['items'] = [{'entityName': i, 'entityType': 'pair'} for i in pair_ids]
+            attrs = [{'addUpdateAttribute': items_dict, 'attributeName': 'pairs', 'op': 'AddUpdateAttribute'}]
+            r = firecloud.api.update_entity(self.namespace, self.workspace, 'pair_set', pair_set_id, attrs)
+            if r.status_code==200:
+                print('Pair set "{}" ({} pairs) successfully updated.'.format(pair_set_id, len(pair_ids)))
+            else:
+                print(r.text)
+        else:  # create
+            set_df = pd.DataFrame(data=np.c_[[pair_set_id]*len(pair_ids), pair_ids], columns=['membership:pair_set_id', 'pair_id'])
+            buf = io.StringIO()
+            set_df.to_csv(buf, sep='\t', index=False)
+            r = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
+            buf.close()
+            assert r.status_code==200
+            print('Pair set "{}" ({} pairs) successfully created.'.format(pair_set_id, len(pair_ids)))
 
     def update_participant_set(self, participant_set_id, participant_ids):
         """
@@ -998,6 +1033,14 @@ class WorkspaceManager(object):
         r = firecloud.api.delete_sample_set(self.namespace, self.workspace, sample_set_id)
         assert r.status_code==204
         print('Sample set "{}" successfully deleted.'.format(sample_set_id))
+
+    def delete_pair_set(self, pair_set_id):
+        """
+        Delete pair set
+        """
+        r = firecloud.api.delete_pair_set(self.namespace, self.workspace, pair_set_id)
+        assert r.status_code==204
+        print('Pair set "{}" successfully deleted.'.format(pair_set_id))
 
 
     def find_sample_set(self, sample_id, sample_set_df=None):
