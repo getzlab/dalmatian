@@ -85,6 +85,12 @@ dalmatian.gs_copy(samples_df[attibute_name], dest_path)
 dalmatian.gs_move(samples_df[attibute_name], dest_path)
 ```
 
+Clone a workspace:
+```
+wm2 = dalmatian.WorkspaceManager(namespace2, workspace2)
+wm2.create_workspace(wm)
+```
+
 
 ### Contents
 
