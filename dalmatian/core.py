@@ -403,7 +403,17 @@ class WorkspaceManager(object):
             attr.pop(k)
         return attr
 
-
+    def get_sample_attributes_in_set(self, set):
+        """
+        Get sample attributes of samples in a set
+        """
+        samples = self.get_sample_sets().loc[set]['samples']
+        all_samples = self.get_samples().index
+        idx = np.zeros(len(all_samples), dtype=bool)
+        for s in samples:
+            idx[all_samples == s] = True
+        return self.get_samples()[idx]
+    
     def get_submission_status(self, filter_active=False, configuration=None, show_namespaces=False):
         """
         Get status of all submissions in the workspace (replicates UI Monitor)
