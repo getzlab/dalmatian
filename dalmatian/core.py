@@ -360,6 +360,87 @@ class WorkspaceManager(object):
             assert r.status_code==200
         print('\n    Finished updating participants in {}/{}'.format(self.namespace, self.workspace))
 
+    def update_participant_samples_and_pairs(self):
+        """
+        Attach samples and pairs to participants
+        """
+        df = self.get_samples()[['participant']]
+        samples_dict = {k:g.index.values for k,g in df.groupby('participant')}
+
+        participant_ids = np.unique(df['participant'])
+        for j,k in enumerate(participant_ids):
+            print('\r    Updating samples for participant {}/{}'.format(j+1,len(participant_ids)), end='')
+            attr_dict = {
+                "samples_": {
+                    "itemsType": "EntityReference",
+                    "items": [{"entityType": "sample", "entityName": i} for i in samples_dict[k]]
+                }
+            }
+            attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
+            assert r.status_code==200
+        print('\n    Finished attaching samples to participants in {}/{}'.format(self.namespace, self.workspace))
+
+        df = self.get_pairs()[['participant']]
+        pairs_dict = {k: g.index.values for k, g in df.groupby('participant')}
+
+        participant_ids = np.unique(df['participant'])
+        for j, k in enumerate(participant_ids):
+            print('\r    Updating pairs for participant {}/{}'.format(j + 1, len(participant_ids)), end='')
+            attr_dict = {
+                "pairs_": {
+                    "itemsType": "EntityReference",
+                    "items": [{"entityType": "pair", "entityName": i} for i in pairs_dict[k]]
+                }
+            }
+            attrs = [firecloud.api._attr_set(i, j) for i, j in attr_dict.items()]
+            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
+            assert r.status_code == 200
+        print('\n    Finished attaching pairs to participants in {}/{}'.format(self.namespace, self.workspace))
+
+    def make_pairs(self, sample_set_id=None):
+        '''
+        Make all possible pairs from participants (all or a specified set)
+        Requires sample_type sample level annotation 'Normal' or 'Tumor'
+        '''
+        # get data from sample set or all samples
+        if sample_set_id == None:
+            df = self.get_samples()
+        else:
+            df = self.get_sample_attributes_in_set(sample_set_id)
+
+        normal_samples = list(df[df['sample_type'] == 'Normal'].index)
+        participants = list(df['participant'])
+        # generate pairs
+        pair_tumors = list()
+        pair_normals = list()
+        pair_ids = list()
+        participant_pair_ids = list()
+        for s in normal_samples:
+            patient = df['participant'][df.index == s][0]
+            idx = [i for i, x in enumerate(participants) if x == patient]
+            patient_sample_tsv = df.iloc[idx]
+            for i, row in patient_sample_tsv.iterrows():
+                if not row['sample_type'] == 'Normal':
+                    pair_tumors.append(i)
+                    pair_normals.append(s)
+                    pair_ids.append(i + '-' + s)
+                    participant_pair_ids.append(patient)
+        columns = ['entity:pair_id', 'case_sample', 'control_sample', 'participant']
+        pair_df = pd.DataFrame(index=pair_ids, columns=columns)
+        pair_df['entity:pair_id'] = pair_ids
+        pair_df['case_sample'] = pair_tumors
+        pair_df['control_sample'] = pair_normals
+        pair_df['participant'] = participant_pair_ids
+        buf = io.StringIO()
+        pair_df.to_csv(buf, sep='\t', index=False)
+        s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
+        buf.close()
+        if s.status_code == 200:
+            print('Successfully imported {} pairs'.format(pair_df.shape[0]))
+        else:
+            print(s.text)
+            raise ValueError('Pair import failed.')
 
     def update_sample_attributes(self, sample_id, attrs):
         """
@@ -899,6 +980,18 @@ class WorkspaceManager(object):
         df['participant'] = df['participant'].apply(lambda x: x['entityName'])
         return df
 
+    def get_pairs(self):
+        """
+        Get DataFrame with pairs and their attributes
+        """
+
+        df = self.get_entities('pair')
+        df['participant'] = df['participant'].apply(lambda x: x['entityName'])
+        df['case_sample'] = df['case_sample'].apply(lambda  x: x['entityName'])
+        df['control_sample'] = df['control_sample'].apply(lambda x: x['entityName'])
+        return df
+
+
 
     def get_sample_sets(self, pattern=None):
         """
@@ -956,6 +1049,29 @@ class WorkspaceManager(object):
             assert r.status_code==200
             print('Sample set "{}" ({} samples) successfully created.'.format(sample_set_id, len(sample_ids)))
 
+    def update_pair_set(self, pair_set_id, pair_ids):
+        """
+        Update (or create) a pair set
+        """
+        r = firecloud.api.get_entity(self.namespace, self.workspace, 'pair_set_id', pair_set_id)
+        if r.status_code==200:  # exists -> update
+            r = r.json()
+            items_dict = r['attributes']['pairs']
+            items_dict['items'] = [{'entityName': i, 'entityType': 'pair'} for i in pair_ids]
+            attrs = [{'addUpdateAttribute': items_dict, 'attributeName': 'pairs', 'op': 'AddUpdateAttribute'}]
+            r = firecloud.api.update_entity(self.namespace, self.workspace, 'pair_set', pair_set_id, attrs)
+            if r.status_code==200:
+                print('Pair set "{}" ({} pairs) successfully updated.'.format(pair_set_id, len(pair_ids)))
+            else:
+                print(r.text)
+        else:  # create
+            set_df = pd.DataFrame(data=np.c_[[pair_set_id]*len(pair_ids), pair_ids], columns=['membership:pair_set_id', 'pair_id'])
+            buf = io.StringIO()
+            set_df.to_csv(buf, sep='\t', index=False)
+            r = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
+            buf.close()
+            assert r.status_code==200
+            print('Pair set "{}" ({} pairs) successfully created.'.format(pair_set_id, len(pair_ids)))
 
     def update_participant_set(self, participant_set_id, participant_ids):
         """
@@ -1007,6 +1123,14 @@ class WorkspaceManager(object):
         r = firecloud.api.delete_sample_set(self.namespace, self.workspace, sample_set_id)
         assert r.status_code==204
         print('Sample set "{}" successfully deleted.'.format(sample_set_id))
+
+    def delete_pair_set(self, pair_set_id):
+        """
+        Delete pair set
+        """
+        r = firecloud.api.delete_pair_set(self.namespace, self.workspace, pair_set_id)
+        assert r.status_code==204
+        print('Pair set "{}" successfully deleted.'.format(pair_set_id))
 
 
     def find_sample_set(self, sample_id, sample_set_df=None):
