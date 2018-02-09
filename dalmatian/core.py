@@ -360,6 +360,44 @@ class WorkspaceManager(object):
             assert r.status_code==200
         print('\n    Finished updating participants in {}/{}'.format(self.namespace, self.workspace))
 
+    def update_participant_samples_and_pairs(self):
+        """
+        Attach samples and pairs to participants
+        """
+        df = self.get_samples()[['participant']]
+        samples_dict = {k:g.index.values for k,g in df.groupby('participant')}
+
+        participant_ids = np.unique(df['participant'])
+        for j,k in enumerate(participant_ids):
+            print('\r    Updating samples for participant {}/{}'.format(j+1,len(participant_ids)), end='')
+            attr_dict = {
+                "samples_": {
+                    "itemsType": "EntityReference",
+                    "items": [{"entityType": "sample", "entityName": i} for i in samples_dict[k]]
+                }
+            }
+            attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
+            assert r.status_code==200
+        print('\n    Finished attaching samples to participants in {}/{}'.format(self.namespace, self.workspace))
+
+        df = self.get_pairs()[['participant']]
+        pairs_dict = {k: g.index.values for k, g in df.groupby('participant')}
+
+        participant_ids = np.unique(df['participant'])
+        for j, k in enumerate(participant_ids):
+            print('\r    Updating pairs for participant {}/{}'.format(j + 1, len(participant_ids)), end='')
+            attr_dict = {
+                "pairs_": {
+                    "itemsType": "EntityReference",
+                    "items": [{"entityType": "pair", "entityName": i} for i in pairs_dict[k]]
+                }
+            }
+            attrs = [firecloud.api._attr_set(i, j) for i, j in attr_dict.items()]
+            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
+            assert r.status_code == 200
+        print('\n    Finished attaching pairs to participants in {}/{}'.format(self.namespace, self.workspace))
+
     def make_pairs(self, sample_set_id=None):
         '''
         Make all possible pairs from participants (all or a specified set)
