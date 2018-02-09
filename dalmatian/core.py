@@ -360,6 +360,49 @@ class WorkspaceManager(object):
             assert r.status_code==200
         print('\n    Finished updating participants in {}/{}'.format(self.namespace, self.workspace))
 
+    def make_pairs(self, sample_set_id=None):
+        '''
+        Make all possible pairs from participants (all or a specified set)
+        Requires sample_type sample level annotation 'Normal' or 'Tumor'
+        '''
+        # get data from sample set or all samples
+        if sample_set_id == None:
+            df = self.get_samples()
+        else:
+            df = self.get_sample_attributes_in_set(sample_set_id)
+
+        normal_samples = list(df[df['sample_type'] == 'Normal'].index)
+        participants = list(df['participant'])
+        # generate pairs
+        pair_tumors = list()
+        pair_normals = list()
+        pair_ids = list()
+        participant_pair_ids = list()
+        for s in normal_samples:
+            patient = df['participant'][df.index == s][0]
+            idx = [i for i, x in enumerate(participants) if x == patient]
+            patient_sample_tsv = df.iloc[idx]
+            for i, row in patient_sample_tsv.iterrows():
+                if not row['sample_type'] == 'Normal':
+                    pair_tumors.append(i)
+                    pair_normals.append(s)
+                    pair_ids.append(i + '-' + s)
+                    participant_pair_ids.append(patient)
+        columns = ['entity:pair_id', 'case_sample', 'control_sample', 'participant']
+        pair_df = pd.DataFrame(index=pair_ids, columns=columns)
+        pair_df['entity:pair_id'] = pair_ids
+        pair_df['case_sample'] = pair_tumors
+        pair_df['control_sample'] = pair_normals
+        pair_df['participant'] = participant_pair_ids
+        buf = io.StringIO()
+        pair_df.to_csv(buf, sep='\t', index=False)
+        s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
+        buf.close()
+        if s.status_code == 200:
+            print('Successfully imported {} pairs'.format(pair_df.shape[0]))
+        else:
+            print(s.text)
+            raise ValueError('Pair import failed.')
 
     def update_sample_attributes(self, sample_id, attrs):
         """
