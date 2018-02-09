@@ -484,6 +484,7 @@ class WorkspaceManager(object):
             attr.pop(k)
         return attr
 
+
     def get_sample_attributes_in_set(self, set):
         """
         Get sample attributes of samples in a set
@@ -494,6 +495,7 @@ class WorkspaceManager(object):
         for s in samples:
             idx[all_samples == s] = True
         return self.get_samples()[idx]
+
 
     def get_submission_status(self, filter_active=False, configuration=None, show_namespaces=False):
         """
@@ -530,9 +532,27 @@ class WorkspaceManager(object):
         return df.sort_values('date')[::-1]
 
 
+    def get_metadata(self, submission_id, workflow_id):
+        """
+        Get metadata JSON for a specific workflow
+        """
+        metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, submission_id, workflow_id)
+        assert metadata.status_code==200
+        return metadata.json()
+
+
+    def get_scatter_status(self, submission_id, workflow_id):
+        """
+        Get status for a specific scatter job
+        """
+        metadata = self.get_metadata(submission_id, workflow_id)
+        # metadata['status']
+        return pd.Series([s['backendStatus'] for s in metadata['calls']['fastqtl_interaction_workflow.fastqtl_interaction_scatter']]).value_counts()
+
+
     def get_sample_status(self, configuration):
         """
-        Get status of lastest submission for samples in the workspace
+        Get status of latest submission for samples in the workspace
 
         Columns: status (Suceeded, Failed, Submitted), submission timestamp, submission ID
         """
@@ -652,11 +672,8 @@ class WorkspaceManager(object):
             for n,sample_id in enumerate(incomplete_df.index):
                 print('\rPatching attributes for sample {}/{}'.format(n+1, incomplete_df.shape[0]), end='')
 
-                metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, sample_status_df.loc[sample_id, 'submission_id'], sample_status_df.loc[sample_id, 'workflow_id'])
-                # assert metadata.status_code==200
-                # metadata = metadata.json()
-                if metadata.status_code==200:
-                    metadata = metadata.json()
+                try:
+                    metadata = self.get_metadata(sample_status_df.loc[sample_id, 'submission_id'], sample_status_df.loc[sample_id, 'workflow_id'])
                     if 'outputs' in metadata and len(metadata['outputs'])!=0 and not dry_run:
                         attr = {output_map[k.split('.')[-1]]:t for k,t in metadata['outputs'].items()}
                         self.update_sample_attributes(sample_id, attr)
@@ -671,7 +688,7 @@ class WorkspaceManager(object):
                                             attr = {output_map[i]:j for i,j in metadata['calls'][task][-1]['outputs'].items()}
                                             self.update_sample_attributes(sample_id, attr)
                                         task_counts[task.split('.')[-1]] += 1
-                else:
+                except:
                     print('Metadata call failed for sample {}'.format(sample_id))
                     print(metadata.json())
             print()
@@ -695,9 +712,7 @@ class WorkspaceManager(object):
                 print('Patching attributes with outputs from latest successful run.')
                 for n,sample_set_id in enumerate(incomplete_df.index):
                     print('\r  * Patching sample set {}/{}'.format(n+1, incomplete_df.shape[0]), end='')
-                    metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, sample_set_status_df.loc[sample_set_id, 'submission_id'], sample_set_status_df.loc[sample_set_id, 'workflow_id'])
-                    assert metadata.status_code==200
-                    metadata = metadata.json()
+                    metadata = self.get_metadata(sample_set_status_df.loc[sample_set_id, 'submission_id'], sample_set_status_df.loc[sample_set_id, 'workflow_id'])
                     if 'outputs' in metadata and len(metadata['outputs'])!=0 and not dry_run:
                         attr = {output_map[k.split('.')[-1]]:t for k,t in metadata['outputs'].items()}
                         self.update_sample_set_attributes(sample_set_id, attr)
@@ -713,9 +728,7 @@ class WorkspaceManager(object):
         status_df = self.get_sample_status(configuration)
 
         # get workflow details from 1st submission
-        metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, status_df['submission_id'][0], status_df['workflow_id'][0])
-        assert metadata.status_code==200
-        metadata = metadata.json()
+        metadata = self.get_metadata(status_df['submission_id'][0], status_df['workflow_id'][0])
 
         workflow_tasks = list(metadata['calls'].keys())
 
@@ -728,9 +741,7 @@ class WorkspaceManager(object):
         state_df = pd.DataFrame(0, index=ix, columns=workflow_tasks)
         for k,i in enumerate(ix):
             print('\rFetching metadata for sample {}/{}'.format(k+1, len(ix)), end='')
-            metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, status_df.loc[i, 'submission_id'], status_df.loc[i, 'workflow_id'])
-            assert metadata.status_code==200
-            metadata = metadata.json()
+            metadata = self.get_metadata(status_df.loc[i, 'submission_id'], status_df.loc[i, 'workflow_id'])
             state_df.loc[i] = [metadata['calls'][t][-1]['executionStatus'] if t in metadata['calls'] else 'Waiting' for t in workflow_tasks]
         print()
         state_df.rename(columns={i:i.split('.')[1] for i in state_df.columns}, inplace=True)
@@ -750,9 +761,7 @@ class WorkspaceManager(object):
         stderrs = []
         for n,i in enumerate(fail_idx):
             print('\rFetching stderr for task {}/{}'.format(n+1, len(fail_idx)), end='\r')
-            metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, state_df.loc[i, 'submission_id'], state_df.loc[i, 'workflow_id'])
-            assert metadata.status_code==200
-            metadata = metadata.json()
+            metadata = self.get_metadata(state_df.loc[i, 'submission_id'], state_df.loc[i, 'workflow_id'])
             stderr_path = metadata['calls'][[i for i in metadata['calls'].keys() if i.split('.')[1]==task_name][0]][-1]['stderr']
             s = subprocess.check_output('gsutil cat '+stderr_path, shell=True, executable='/bin/bash').decode()
             stderrs.append(s)
@@ -781,9 +790,7 @@ class WorkspaceManager(object):
             assert r.status_code==200
             r = r.json()
 
-            metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, s['submissionId'], r['workflows'][0]['workflowId'])
-            assert metadata.status_code==200
-            metadata = metadata.json()
+            metadata = self.get_metadata(s['submissionId'], r['workflows'][0]['workflowId'])
 
             outputs_s = pd.Series(metadata['outputs'])
             outputs_s.index = [i.split('.',1)[1].replace('.','_') for i in outputs_s.index]
@@ -821,10 +828,12 @@ class WorkspaceManager(object):
             print('\rFetching metadata {}/{}'.format(k+1,status_df.shape[0]), end='')
             fetch = True
             while fetch:  # improperly dealing with 500s here...
-                metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, row['submission_id'], row['workflow_id'])
-                if metadata.status_code==200:
-                     metadata_dict[i] = metadata.json()
-                     fetch = False
+                try:
+                    metadata = self.get_metadata(row['submission_id'], row['workflow_id'])
+                    metadata_dict[i] = metadata.json()
+                    fetch = False
+                except:
+                    pass
 
         # if workflow_name is None:
             # split output by workflow
