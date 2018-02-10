@@ -522,7 +522,7 @@ class WorkspaceManager(object):
 
     def get_submission(self, submission_id):
         """Get submission metadata"""
-        r = firecloud.api.get_submission(self.namespace, self.workspace, s['submissionId'])
+        r = firecloud.api.get_submission(self.namespace, self.workspace, submission_id)
         assert r.status_code==200
         return r.json()
 
@@ -541,89 +541,61 @@ class WorkspaceManager(object):
         return r.json()
 
 
-    def get_scatter_status(self, submission_id, workflow_id):
-        """Get status for a specific scatter job"""
+    def print_scatter_status(self, submission_id, workflow_id):
+        """Print status for a specific scatter job"""
         metadata = self.get_workflow_metadata(submission_id, workflow_id)
-        # metadata['status']
-        return pd.Series([s['backendStatus'] for s in metadata['calls']['fastqtl_interaction_workflow.fastqtl_interaction_scatter']]).value_counts()
+        assert len(metadata['calls'].keys())==1
+        task_name = list(metadata['calls'].keys())[0]
+        print('Submission status: {}'.format(metadata['status']))
+        s = pd.Series([s['backendStatus'] for s in metadata['calls'][task_name]])
+        print(s.value_counts().to_string())
 
 
-    def get_sample_status(self, configuration):
-        """
-        Get status of latest submission for samples in the workspace
-
-        Columns: status (Suceeded, Failed, Submitted), submission timestamp, submission ID
-        """
+    def get_entity_status(self, etype, configuration):
+        """Get status of latest submission for the entity type in the workspace"""
 
         # filter submissions by configuration
         submissions = self.list_submissions()
         submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
 
         # get status of last run submission
-        sample_dict = {}
-        for s in submissions:
-            r = self.get_submission(s['submissionId'])
+        entity_dict = {}
+        for k,s in enumerate(submissions):
+            print('\rFetching submission {}/{}'.format(k+1, len(submissions)), end='')
+            if s['submissionEntity']['entityType']!=etype:
+                raise ValueError('Incompatible submission entity type: {}'.format(
+                    s['submissionEntity']['entityType']))
 
+            r = self.get_submission(s['submissionId'])
             ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
             for w in r['workflows']:
                 entity_id = w['workflowEntity']['entityName']
-                if entity_id not in sample_dict or sample_dict[entity_id]['timestamp']<ts:
-                    sample_dict[entity_id] = {
+                if entity_id not in entity_dict or entity_dict[entity_id]['timestamp']<ts:
+                    entity_dict[entity_id] = {
                         'status':w['status'],
                         'timestamp':ts, 
                         'submission_id':s['submissionId'],
                         'configuration':s['methodConfigurationName']
                     }
                     if 'workflowId' in w:
-                        sample_dict[entity_id]['workflow_id'] = w['workflowId']
+                        entity_dict[entity_id]['workflow_id'] = w['workflowId']
                     else:
-                        sample_dict[entity_id]['workflow_id'] = 'NA'
-
-        status_df = pd.DataFrame(sample_dict).T
-        status_df.index.name = 'sample_id'
+                        entity_dict[entity_id]['workflow_id'] = 'NA'
+        print()
+        status_df = pd.DataFrame(entity_dict).T
+        status_df.index.name = etype+'_id'
 
         return status_df[['status', 'timestamp', 'workflow_id', 'submission_id', 'configuration']]
+
+
+    def get_sample_status(self, configuration):
+        """Get status of lastest submission for samples in the workspace"""
+        return self.get_entity_status('sample', configuration)
 
 
     def get_sample_set_status(self, configuration):
-        """
-        Get status of lastest submission for samples in the workspace
-
-        Columns: status (Suceeded, Failed, Submitted), submission timestamp, submission ID
-        """
-
-        # filter submissions by configuration
-        submissions = self.list_submissions()
-        submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
-
-        # get status of last run submission
-        sample_set_dict = {}
-        for k,s in enumerate(submissions):
-            print('\rFetching submission {}/{}'.format(k+1, len(submissions)), end='')
-            r = self.get_submission(s['submissionId'])
-
-            ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
-            if s['submissionEntity']['entityType']=='sample_set':
-                if len(r['workflows'])==1:
-                    sample_set_id = s['submissionEntity']['entityName']
-                    if sample_set_id not in sample_set_dict or sample_set_dict[sample_set_id]['timestamp']<ts:
-                        status = r['workflows'][0]['status']
-                        sample_set_dict[sample_set_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':r['workflows'][0]['workflowId']}
-                else:
-                    for w in r['workflows']:
-                        assert w['workflowEntity']['entityType']=='sample_set'
-                        sample_set_id = w['workflowEntity']['entityName']
-                        if sample_set_id not in sample_set_dict or sample_set_dict[sample_set_id]['timestamp']<ts:
-                            status = w['status']
-                            sample_set_dict[sample_set_id] = {'status':status, 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':w['workflowId']}
-            else:
-                raise ValueError('Incompatible submission entity type: {}'.format(s['submissionEntity']['entityType']))
-        print()
-        status_df = pd.DataFrame(sample_set_dict).T
-        status_df.index.name = 'sample_set_id'
-
-        # print(status_df['status'].value_counts())
-        return status_df[['status', 'timestamp', 'workflow_id', 'submission_id', 'configuration']]
+        """Get status of lastest submission for sample sets in the workspace"""
+        return self.get_entity_status('sample_set', configuration)
 
 
     def patch_attributes(self, cnamespace, configuration, dry_run=False, entity='sample'):
