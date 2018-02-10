@@ -96,45 +96,37 @@ def workflow_time(workflow):
 #------------------------------------------------------------------------------
 
 def gs_list_bucket_files(bucket_id):
-    """
-    Get list of all files stored in bucket
-    """
-    s = subprocess.check_output('gsutil ls gs://{}/**'.format(bucket_id), shell=True, executable='/bin/bash')
+    """Get list of all files stored in bucket"""
+    s = subprocess.check_output('gsutil ls gs://{}/**'.format(bucket_id), shell=True)
     return s.decode().strip().split('\n')
 
 
 def gs_delete(file_list, chunk_size=500):
-    """
-    Delete list of files (paths starting with gs://)
-    """
+    """Delete list of files (paths starting with gs://)"""
     # number of calls is limited by command line size limit
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         cmd = 'echo -e "{}" | gsutil -m rm -I'.format('\n'.join(x))
-        subprocess.call(cmd, shell=True, executable='/bin/bash')
+        subprocess.call(cmd, shell=True)
 
 
 def gs_copy(file_list, dest_dir, chunk_size=500):
-    """
-    Copy list of files (paths starting with gs://)
-    """
+    """Copy list of files (paths starting with gs://)"""
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         cmd = 'echo -e "{}" | gsutil -m cp -I {}'.format('\n'.join(x), dest_dir)
-        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
+        subprocess.check_call(cmd, shell=True)
 
 
 def gs_move(file_list, dest_dir, chunk_size=500):
-    """
-    Move list of files (paths starting with gs://)
-    """
+    """Move list of files (paths starting with gs://)"""
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         cmd = 'echo -e "{}" | gsutil -m mv -I {}'.format('\n'.join(x), dest_dir)
-        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
+        subprocess.check_call(cmd, shell=True)
 
 
 def gs_exists(file_list_s):
@@ -162,19 +154,19 @@ def gs_size(file_list_s):
     file_list_s: pd.Series
     """
     prefix = os.path.commonprefix(file_list_s.tolist())
-    s = subprocess.check_output('gsutil ls -l {}**'.format(prefix), shell=True, executable='/bin/bash')
+    s = subprocess.check_output('gsutil ls -l {}**'.format(prefix), shell=True)
     gs_sizes = s.decode().strip().split('\n')[:-1]
-    gs_sizes = pd.Series([np.int64(i.split()[0]) for i in gs_sizes], index=[i.split()[-1] for i in gs_sizes])
+    gs_sizes = pd.Series([np.int64(i.split()[0]) for i in gs_sizes],
+        index=[i.split()[-1] for i in gs_sizes])
     gs_sizes.index.name = 'path'
     return pd.Series(gs_sizes[file_list_s].values, index=file_list_s.index, name='size_bytes')
 
 
 def get_md5hash(file_path):
-    """
-    Calculate MD5 hash using gsutil or md5sum depending on location
-    """
+    """Calculate MD5 hash using gsutil or md5sum, depending on location"""
     if file_path.startswith('gs://'):
-        s = subprocess.check_output('gsutil hash -m -h '+file_path, shell=True).decode().strip().split('\n')
+        s = subprocess.check_output('gsutil hash -m -h '+file_path, shell=True).decode()
+        s = s.strip().split('\n')
         s = [i for i in s if 'md5' in i][0]
         return s.split()[-1]
     else:
@@ -182,6 +174,7 @@ def get_md5hash(file_path):
 
 
 def get_md5hashes(file_list_s, num_threads=10):
+    """Parallelized get_md5hash()"""
     md5_hashes = []
     with mp.Pool(processes=num_threads) as pool:
         for k,r in enumerate(pool.imap(get_md5hash, [i for i in file_list_s])):
@@ -211,9 +204,7 @@ class WorkspaceCollection(object):
             print('  {}/{}'.format(i.namespace, i.workspace))
 
     def get_submission_status(self, show_namespaces=False):
-        """
-        Get status of all submissions across workspaces
-        """
+        """Get status of all submissions across workspaces"""
         dfs = []
         for i in self.workspace_list:
             df = i.get_submission_status(show_namespaces=show_namespaces)
@@ -233,9 +224,7 @@ class WorkspaceManager(object):
 
 
     def create_workspace(self, wm=None):
-        """
-        Wrapper for firecloud.api.create_workspace
-        """
+        """Create the workspace, or clone from another"""
         if wm is None:
             r = firecloud.api.create_workspace(self.namespace, self.workspace)
             if r.status_code==201:
@@ -247,12 +236,14 @@ class WorkspaceManager(object):
         else:  # clone workspace
             r = firecloud.api.clone_workspace(wm.namespace, wm.workspace, self.namespace, self.workspace)
             if r.status_code==201:
-                print('Workspace {}/{} successfully cloned from {}/{}.'.format(self.namespace, self.workspace, wm.namespace, wm.workspace))
+                print('Workspace {}/{} successfully cloned from {}/{}.'.format(
+                    self.namespace, self.workspace, wm.namespace, wm.workspace))
             else:
                 print(r.text)
 
 
     def delete_workspace(self):
+        """Delete the workspace"""
         r = firecloud.api.delete_workspace(self.namespace, self.workspace)
         if r.status_code==202:
             print('Workspace {}/{} successfully deleted.'.format(self.namespace, self.workspace))
@@ -262,6 +253,7 @@ class WorkspaceManager(object):
 
 
     def get_bucket_id(self):
+        """Get the GCS bucket ID associated with the workspace"""
         r = firecloud.api.get_workspace(self.namespace, self.workspace)
         assert r.status_code==200
         r = r.json()
@@ -283,7 +275,8 @@ class WorkspaceManager(object):
             participant_ids = np.unique(df['participant_id'])
             participant_df = pd.DataFrame(data=participant_ids, columns=['entity:participant_id'])
         else:
-            assert participant_df.index.name=='entity:participant_id' or participant_df.columns[0]=='entity:participant_id'
+            assert (participant_df.index.name=='entity:participant_id'
+                or participant_df.columns[0]=='entity:participant_id')
 
         buf = io.StringIO()
         participant_df.to_csv(buf, sep='\t', index=participant_df.index.name=='entity:participant_id')
@@ -322,14 +315,13 @@ class WorkspaceManager(object):
 
         if add_participant_samples:
             # 4) add participant.samples_
-            print('  * The FireCloud data model currently does not provide participant.samples\n    Adding "participant.samples_" as an explicit attribute.')
+            print('  * The FireCloud data model currently does not provide participant.samples\n',
+                  '    Adding "participant.samples_" as an explicit attribute.', sep='')
             self.update_participant_samples()
 
 
     def upload_participants(self, participant_ids):
-        """
-        Upload a list of participants IDs
-        """
+        """Upload a list of participants IDs"""
         participant_df = pd.DataFrame(data=np.unique(participant_ids), columns=['entity:participant_id'])
         buf = io.StringIO()
         participant_df.to_csv(buf, sep='\t', index=participant_df.index.name=='entity:participant_id')
@@ -340,9 +332,7 @@ class WorkspaceManager(object):
 
 
     def update_participant_samples(self):
-        """
-        Attach samples to participants
-        """
+        """Attach samples to participants"""
         df = self.get_samples()[['participant']]
         samples_dict = {k:g.index.values for k,g in df.groupby('participant')}
 
@@ -360,10 +350,9 @@ class WorkspaceManager(object):
             assert r.status_code==200
         print('\n    Finished updating participants in {}/{}'.format(self.namespace, self.workspace))
 
+
     def update_participant_samples_and_pairs(self):
-        """
-        Attach samples and pairs to participants
-        """
+        """Attach samples and pairs to participants"""
         df = self.get_samples()[['participant']]
         samples_dict = {k:g.index.values for k,g in df.groupby('participant')}
 
@@ -399,10 +388,10 @@ class WorkspaceManager(object):
         print('\n    Finished attaching pairs to participants in {}/{}'.format(self.namespace, self.workspace))
 
     def make_pairs(self, sample_set_id=None):
-        '''
+        """
         Make all possible pairs from participants (all or a specified set)
         Requires sample_type sample level annotation 'Normal' or 'Tumor'
-        '''
+        """
         # get data from sample set or all samples
         if sample_set_id == None:
             df = self.get_samples()
@@ -442,10 +431,9 @@ class WorkspaceManager(object):
             print(s.text)
             raise ValueError('Pair import failed.')
 
+
     def update_sample_attributes(self, sample_id, attrs):
-        """
-        Set or update attributes in attrs (pd.Series or pd.DataFrame)
-        """
+        """Set or update attributes in attrs (pd.Series or pd.DataFrame)"""
         self.update_entity_attributes('sample', attrs)
 
 
@@ -457,9 +445,7 @@ class WorkspaceManager(object):
 
 
     def delete_sample_set_attributes(self, sample_set_id, attrs):
-        """
-        Delete attributes
-        """
+        """Delete attributes"""
         self.delete_entity_attributes(self, 'sample_set', sample_set_id, attrs)
 
 
@@ -474,9 +460,7 @@ class WorkspaceManager(object):
 
 
     def get_attributes(self):
-        """
-        Get workspace attributes
-        """
+        """Get workspace attributes"""
         r = firecloud.api.get_workspace(self.namespace, self.workspace)
         assert r.status_code==200
         attr = r.json()['workspace']['attributes']
@@ -486,9 +470,7 @@ class WorkspaceManager(object):
 
 
     def get_sample_attributes_in_set(self, set):
-        """
-        Get sample attributes of samples in a set
-        """
+        """Get sample attributes of samples in a set"""
         samples = self.get_sample_sets().loc[set]['samples']
         all_samples = self.get_samples().index
         idx = np.zeros(len(all_samples), dtype=bool)
@@ -501,10 +483,8 @@ class WorkspaceManager(object):
         """
         Get status of all submissions in the workspace (replicates UI Monitor)
         """
-        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
-        assert submissions.status_code==200
-        submissions = submissions.json()
-
+        # filter submissions by configuration
+        submissions = self.list_submissions()
         if configuration is not None:
             submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
 
@@ -532,20 +512,38 @@ class WorkspaceManager(object):
         return df.sort_values('date')[::-1]
 
 
-    def get_metadata(self, submission_id, workflow_id):
-        """
-        Get metadata JSON for a specific workflow
-        """
-        metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace, submission_id, workflow_id)
+    def get_workflow_metadata(self, submission_id, workflow_id):
+        """Get metadata JSON for a specific workflow"""
+        metadata = firecloud.api.get_workflow_metadata(self.namespace, self.workspace,
+            submission_id, workflow_id)
         assert metadata.status_code==200
         return metadata.json()
 
 
+    def get_submission(self, submission_id):
+        """Get submission metadata"""
+        r = firecloud.api.get_submission(self.namespace, self.workspace, s['submissionId'])
+        assert r.status_code==200
+        return r.json()
+
+
+    def list_submissions(self):
+        """List all submissions from workspace"""
+        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
+        assert submissions.status_code==200
+        return submissions.json()
+
+
+    def list_configs(self):
+        """List configurations in workspace"""
+        r = firecloud.api.list_workspace_configs(self.namespace, self.workspace)
+        assert r.status_code==200
+        return r.json()
+
+
     def get_scatter_status(self, submission_id, workflow_id):
-        """
-        Get status for a specific scatter job
-        """
-        metadata = self.get_metadata(submission_id, workflow_id)
+        """Get status for a specific scatter job"""
+        metadata = self.get_workflow_metadata(submission_id, workflow_id)
         # metadata['status']
         return pd.Series([s['backendStatus'] for s in metadata['calls']['fastqtl_interaction_workflow.fastqtl_interaction_scatter']]).value_counts()
 
@@ -557,34 +555,33 @@ class WorkspaceManager(object):
         Columns: status (Suceeded, Failed, Submitted), submission timestamp, submission ID
         """
 
-        # get submissions
-        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
-        assert submissions.status_code==200
-        submissions = submissions.json()
-
-        # filter by configuration
+        # filter submissions by configuration
+        submissions = self.list_submissions()
         submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
 
         # get status of last run submission
         sample_dict = {}
         for s in submissions:
-            r = firecloud.api.get_submission(self.namespace, self.workspace, s['submissionId'])
-            assert r.status_code==200
-            r = r.json()
+            r = self.get_submission(s['submissionId'])
 
             ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
             for w in r['workflows']:
                 entity_id = w['workflowEntity']['entityName']
                 if entity_id not in sample_dict or sample_dict[entity_id]['timestamp']<ts:
+                    sample_dict[entity_id] = {
+                        'status':w['status'],
+                        'timestamp':ts, 
+                        'submission_id':s['submissionId'],
+                        'configuration':s['methodConfigurationName']
+                    }
                     if 'workflowId' in w:
-                        sample_dict[entity_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':w['workflowId']}
+                        sample_dict[entity_id]['workflow_id'] = w['workflowId']
                     else:
-                        sample_dict[entity_id] = {'status':w['status'], 'timestamp':ts, 'submission_id':s['submissionId'], 'configuration':s['methodConfigurationName'], 'workflow_id':'NA'}
+                        sample_dict[entity_id]['workflow_id'] = 'NA'
 
         status_df = pd.DataFrame(sample_dict).T
         status_df.index.name = 'sample_id'
 
-        # print(status_df['status'].value_counts())
         return status_df[['status', 'timestamp', 'workflow_id', 'submission_id', 'configuration']]
 
 
@@ -594,21 +591,16 @@ class WorkspaceManager(object):
 
         Columns: status (Suceeded, Failed, Submitted), submission timestamp, submission ID
         """
-        # get submissions
-        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
-        assert submissions.status_code==200
-        submissions = submissions.json()
 
-        # filter by configuration
+        # filter submissions by configuration
+        submissions = self.list_submissions()
         submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
 
         # get status of last run submission
         sample_set_dict = {}
         for k,s in enumerate(submissions):
             print('\rFetching submission {}/{}'.format(k+1, len(submissions)), end='')
-            r = firecloud.api.get_submission(self.namespace, self.workspace, s['submissionId'])
-            assert r.status_code==200
-            r = r.json()
+            r = self.get_submission(s['submissionId'])
 
             ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
             if s['submissionEntity']['entityType']=='sample_set':
@@ -673,7 +665,7 @@ class WorkspaceManager(object):
                 print('\rPatching attributes for sample {}/{}'.format(n+1, incomplete_df.shape[0]), end='')
 
                 try:
-                    metadata = self.get_metadata(sample_status_df.loc[sample_id, 'submission_id'], sample_status_df.loc[sample_id, 'workflow_id'])
+                    metadata = self.get_workflow_metadata(sample_status_df.loc[sample_id, 'submission_id'], sample_status_df.loc[sample_id, 'workflow_id'])
                     if 'outputs' in metadata and len(metadata['outputs'])!=0 and not dry_run:
                         attr = {output_map[k.split('.')[-1]]:t for k,t in metadata['outputs'].items()}
                         self.update_sample_attributes(sample_id, attr)
@@ -712,7 +704,7 @@ class WorkspaceManager(object):
                 print('Patching attributes with outputs from latest successful run.')
                 for n,sample_set_id in enumerate(incomplete_df.index):
                     print('\r  * Patching sample set {}/{}'.format(n+1, incomplete_df.shape[0]), end='')
-                    metadata = self.get_metadata(sample_set_status_df.loc[sample_set_id, 'submission_id'], sample_set_status_df.loc[sample_set_id, 'workflow_id'])
+                    metadata = self.get_workflow_metadata(sample_set_status_df.loc[sample_set_id, 'submission_id'], sample_set_status_df.loc[sample_set_id, 'workflow_id'])
                     if 'outputs' in metadata and len(metadata['outputs'])!=0 and not dry_run:
                         attr = {output_map[k.split('.')[-1]]:t for k,t in metadata['outputs'].items()}
                         self.update_sample_set_attributes(sample_set_id, attr)
@@ -728,7 +720,7 @@ class WorkspaceManager(object):
         status_df = self.get_sample_status(configuration)
 
         # get workflow details from 1st submission
-        metadata = self.get_metadata(status_df['submission_id'][0], status_df['workflow_id'][0])
+        metadata = self.get_workflow_metadata(status_df['submission_id'][0], status_df['workflow_id'][0])
 
         workflow_tasks = list(metadata['calls'].keys())
 
@@ -741,7 +733,7 @@ class WorkspaceManager(object):
         state_df = pd.DataFrame(0, index=ix, columns=workflow_tasks)
         for k,i in enumerate(ix):
             print('\rFetching metadata for sample {}/{}'.format(k+1, len(ix)), end='')
-            metadata = self.get_metadata(status_df.loc[i, 'submission_id'], status_df.loc[i, 'workflow_id'])
+            metadata = self.get_workflow_metadata(status_df.loc[i, 'submission_id'], status_df.loc[i, 'workflow_id'])
             state_df.loc[i] = [metadata['calls'][t][-1]['executionStatus'] if t in metadata['calls'] else 'Waiting' for t in workflow_tasks]
         print()
         state_df.rename(columns={i:i.split('.')[1] for i in state_df.columns}, inplace=True)
@@ -761,9 +753,9 @@ class WorkspaceManager(object):
         stderrs = []
         for n,i in enumerate(fail_idx):
             print('\rFetching stderr for task {}/{}'.format(n+1, len(fail_idx)), end='\r')
-            metadata = self.get_metadata(state_df.loc[i, 'submission_id'], state_df.loc[i, 'workflow_id'])
+            metadata = self.get_workflow_metadata(state_df.loc[i, 'submission_id'], state_df.loc[i, 'workflow_id'])
             stderr_path = metadata['calls'][[i for i in metadata['calls'].keys() if i.split('.')[1]==task_name][0]][-1]['stderr']
-            s = subprocess.check_output('gsutil cat '+stderr_path, shell=True, executable='/bin/bash').decode()
+            s = subprocess.check_output('gsutil cat '+stderr_path, shell=True).decode()
             stderrs.append(s)
         return stderrs
 
@@ -773,12 +765,9 @@ class WorkspaceManager(object):
         Currently only supports samples
         """
 
-        # get submissions
-        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
-        assert submissions.status_code==200
-        submissions = submissions.json()
-
-        # filter by configuration
+        # filter submissions by configuration
+        submissions = self.list_submissions()
+        submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
         submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
 
         # filter by sample
@@ -786,11 +775,9 @@ class WorkspaceManager(object):
 
         outputs_df = []
         for s in submissions:
-            r = firecloud.api.get_submission(self.namespace, self.workspace, s['submissionId'])
-            assert r.status_code==200
-            r = r.json()
+            r = self.get_submission(s['submissionId'])
 
-            metadata = self.get_metadata(s['submissionId'], r['workflows'][0]['workflowId'])
+            metadata = self.get_workflow_metadata(s['submissionId'], r['workflows'][0]['workflowId'])
 
             outputs_s = pd.Series(metadata['outputs'])
             outputs_s.index = [i.split('.',1)[1].replace('.','_') for i in outputs_s.index]
@@ -813,7 +800,7 @@ class WorkspaceManager(object):
                  $0.02/GB/month (regional)
         """
         bucket_id = self.get_bucket_id()
-        s = subprocess.check_output('gsutil du -s gs://'+bucket_id, shell=True, executable='/bin/bash')
+        s = subprocess.check_output('gsutil du -s gs://'+bucket_id, shell=True)
         return np.float64(s.decode().split()[0])/1024**4
 
 
@@ -829,7 +816,7 @@ class WorkspaceManager(object):
             fetch = True
             while fetch:  # improperly dealing with 500s here...
                 try:
-                    metadata = self.get_metadata(row['submission_id'], row['workflow_id'])
+                    metadata = self.get_workflow_metadata(row['submission_id'], row['workflow_id'])
                     metadata_dict[i] = metadata.json()
                     fetch = False
                 except:
@@ -1117,26 +1104,24 @@ class WorkspaceManager(object):
 
 
     def delete_sample_set(self, sample_set_id):
-        """
-        Delete sample set
-        """
+        """Delete sample set"""
         r = firecloud.api.delete_sample_set(self.namespace, self.workspace, sample_set_id)
         assert r.status_code==204
         print('Sample set "{}" successfully deleted.'.format(sample_set_id))
 
+
     def delete_pair_set(self, pair_set_id):
-        """
-        Delete pair set
-        """
+        """Delete pair set"""
         r = firecloud.api.delete_pair_set(self.namespace, self.workspace, pair_set_id)
         assert r.status_code==204
         print('Pair set "{}" successfully deleted.'.format(pair_set_id))
 
 
     def find_sample_set(self, sample_id, sample_set_df=None):
+        """Find sample set(s) containing sample"""
         if sample_set_df is None:
             sample_set_df = self.get_sample_sets()
-        return [i for i,s in zip(sample_set_df.index, sample_set_df['samples']) if 'GTEX-1C2JI-0626-SM-7DHM1' in s]
+        return sample_set_df[sample_set_df['samples'].apply(lambda x: sample_id in x)].index.tolist()
 
 
     def purge_outdated(self, attribute, bucket_files=None, samples_df=None, ext=None):
@@ -1268,19 +1253,19 @@ class WorkspaceManager(object):
     #         return r
 
 
-    # def delete_samples(self, sample_ids):
-    #     """
-    #     Delete sample or list of samples
-    #     """
-    #     r = firecloud.api.delete_sample(self.namespace, self.workspace, sample_ids)
-    #
-    # IF LAST SAMPLE, ALSO NEED TO DELETE PARTICIPANT
-    #
-    # def delete_participants(self, participant_ids):
-    #     """
-    #     Delete participant or list of participants
-    #     """
-    #     r = firecloud.api.delete_participant(self.namespace, self.workspace, participant_ids)
+    def delete_sample(self, sample_ids):
+        """Delete sample or list of samples"""
+        r = firecloud.api.delete_sample(self.namespace, self.workspace, sample_ids)
+        assert r.status_code==204
+        # IF LAST SAMPLE, ALSO NEED TO DELETE PARTICIPANT -- no longer seems to be the case?
+
+
+    def delete_participant(self, participant_ids):
+        """
+        Delete participant or list of participants
+        """
+        r = firecloud.api.delete_participant(self.namespace, self.workspace, participant_ids)
+        assert r.status_code==204
 
 
     def update_configuration(self, json_body):
@@ -1300,7 +1285,7 @@ class WorkspaceManager(object):
         }
 
         """
-        r = firecloud.api.list_workspace_configs(self.namespace, self.workspace)
+        r = self.list_configs()
         if json_body['name'] not in [m['name'] for m in r.json()]:
             # configuration doesn't exist -> name, namespace specified in json_body
             r = firecloud.api.create_workspace_config(self.namespace, self.workspace, json_body)
@@ -1320,9 +1305,7 @@ class WorkspaceManager(object):
         """
         Get version of a configuration and compare to latest available in repository
         """
-        r = firecloud.api.list_workspace_configs(self.namespace, self.workspace)
-        assert r.status_code==200
-        r = r.json()
+        r = self.list_configs()
         r = [i for i in r if i['name']==config_name][0]
         # method repo version
         mrversion = get_method_version(r['methodRepoMethod']['methodNamespace'], r['methodRepoMethod']['methodName'])
@@ -1332,11 +1315,9 @@ class WorkspaceManager(object):
 
     def get_configs(self, latest_only=False):
         """
-        All configurations in the workspace
+        Get all configurations in the workspace
         """
-        r = firecloud.api.list_workspace_configs(self.namespace, self.workspace)
-        assert r.status_code==200
-        r = r.json()
+        r = self.list_configs()
         df = pd.io.json.json_normalize(r)
         df.rename(columns={c:c.split('methodRepoMethod.')[-1] for c in df.columns}, inplace=True)
         if latest_only:
@@ -1366,13 +1347,13 @@ def get_google_metadata(job_id):
     jobid: operations ID
     """
     if isinstance(job_id, str):
-        s = subprocess.check_output('gcloud alpha genomics operations describe '+job_id+' --format json', shell=True, executable='/bin/bash')
+        s = subprocess.check_output('gcloud alpha genomics operations describe '+job_id+' --format json', shell=True)
         return json.loads(s.decode())
     elif isinstance(job_id, Iterable):
         json_list = []
         for k,j in enumerate(job_id):
             print('\rFetching metadata ({}/{})'.format(k+1,len(job_id)), end='')
-            s = subprocess.check_output('gcloud alpha genomics operations describe '+j+' --format json', shell=True, executable='/bin/bash')
+            s = subprocess.check_output('gcloud alpha genomics operations describe '+j+' --format json', shell=True)
             json_list.append(json.loads(s.decode()))
         return json_list
 
@@ -1529,7 +1510,7 @@ def compare_wdls(mnamespace1, mname1, mnamespace2, mname2):
     print('< {}:{}.v{}'.format(mnamespace1, mname1, v1))
     print('> {}:{}.v{}'.format(mnamespace2, mname2, v2))
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
-    d = subprocess.run(cmd, shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
+    d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE)
     print(d.stdout.decode())
 
 
@@ -1545,7 +1526,7 @@ def compare_wdl(mnamespace, mname, wdl_path):
     print('< {}'.format(wdl_path))
     print('> {}:{}.v{}'.format(mnamespace, mname, v))
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
-    d = subprocess.run(cmd, shell=True, executable='/bin/bash', stdout=subprocess.PIPE)
+    d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE)
     print(d.stdout.decode())
 
 
