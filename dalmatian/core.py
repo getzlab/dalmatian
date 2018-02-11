@@ -479,14 +479,12 @@ class WorkspaceManager(object):
         return self.get_samples()[idx]
 
 
-    def get_submission_status(self, filter_active=False, configuration=None, show_namespaces=False):
+    def get_submission_status(self, filter_active=False, config=None, show_namespaces=False):
         """
         Get status of all submissions in the workspace (replicates UI Monitor)
         """
         # filter submissions by configuration
-        submissions = self.list_submissions()
-        if configuration is not None:
-            submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
+        submissions = self.list_submissions(config=config)
 
         statuses = ['Succeeded', 'Running', 'Failed', 'Aborted', 'Submitted', 'Queued']
         df = []
@@ -527,11 +525,16 @@ class WorkspaceManager(object):
         return r.json()
 
 
-    def list_submissions(self):
+    def list_submissions(self, config=None):
         """List all submissions from workspace"""
         submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
         assert submissions.status_code==200
-        return submissions.json()
+        submissions = submissions.json()
+
+        if config is not None:
+            submissions = [s for s in submissions if config in s['methodConfigurationName']]
+
+        return submissions
 
 
     def list_configs(self):
@@ -541,22 +544,25 @@ class WorkspaceManager(object):
         return r.json()
 
 
-    def print_scatter_status(self, submission_id, workflow_id):
+    def print_scatter_status(self, submission_id, workflow_id=None):
         """Print status for a specific scatter job"""
+        if workflow_id is None:
+            s = self.get_submission(submission_id)
+            assert len(s['workflows'])==1
+            workflow_id = s['workflows'][0]['workflowId']
         metadata = self.get_workflow_metadata(submission_id, workflow_id)
-        assert len(metadata['calls'].keys())==1
-        task_name = list(metadata['calls'].keys())[0]
-        print('Submission status: {}'.format(metadata['status']))
-        s = pd.Series([s['backendStatus'] for s in metadata['calls'][task_name]])
-        print(s.value_counts().to_string())
+        for task_name in metadata['calls']:
+            if np.all(['shardIndex' in i for i in metadata['calls'][task_name]]):
+                print('Submission status ({}): {}'.format(task_name.split('.')[-1], metadata['status']))
+                s = pd.Series([s['backendStatus'] for s in metadata['calls'][task_name]])
+                print(s.value_counts().to_string())
 
 
-    def get_entity_status(self, etype, configuration):
+    def get_entity_status(self, etype, config):
         """Get status of latest submission for the entity type in the workspace"""
 
         # filter submissions by configuration
-        submissions = self.list_submissions()
-        submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
+        submissions = self.list_submissions(config=config)
 
         # get status of last run submission
         entity_dict = {}
@@ -573,7 +579,7 @@ class WorkspaceManager(object):
                 if entity_id not in entity_dict or entity_dict[entity_id]['timestamp']<ts:
                     entity_dict[entity_id] = {
                         'status':w['status'],
-                        'timestamp':ts, 
+                        'timestamp':ts,
                         'submission_id':s['submissionId'],
                         'configuration':s['methodConfigurationName']
                     }
@@ -732,15 +738,13 @@ class WorkspaceManager(object):
         return stderrs
 
 
-    def get_submission_history(self, configuration, sample_id):
+    def get_submission_history(self, sample_id, config=None):
         """
         Currently only supports samples
         """
 
         # filter submissions by configuration
-        submissions = self.list_submissions()
-        submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
-        submissions = [s for s in submissions if configuration in s['methodConfigurationName']]
+        submissions = self.list_submissions(config=config)
 
         # filter by sample
         submissions = [s for s in submissions if s['submissionEntity']['entityName']==sample_id and 'Succeeded' in list(s['workflowStatuses'].keys())]
@@ -1008,6 +1012,7 @@ class WorkspaceManager(object):
             assert r.status_code==200
             print('Sample set "{}" ({} samples) successfully created.'.format(sample_set_id, len(sample_ids)))
 
+
     def update_pair_set(self, pair_set_id, pair_ids):
         """
         Update (or create) a pair set
@@ -1031,6 +1036,7 @@ class WorkspaceManager(object):
             buf.close()
             assert r.status_code==200
             print('Pair set "{}" ({} pairs) successfully created.'.format(pair_set_id, len(pair_ids)))
+
 
     def update_participant_set(self, participant_set_id, participant_ids):
         """
@@ -1138,34 +1144,37 @@ class WorkspaceManager(object):
 
     def update_entity_attributes(self, etype, attrs):
         """
+        Create or update entity attributes
 
-        Use cases:
-          - update specific attribute, for specific entity
-          - update specific attribute for multiple entities
+        attrs:
+          pd.DataFrame: update entities x attributes
+          pd.Series:    update attribute (attr.name)
+                        for multiple entities (attr.index)
 
+          To update multiple attributes for a single entity, use:
+            pd.DataFrame(attr_dict, index=[entity_name]))
 
-        update_df:  columns: sample_set_ids, rows: attributes
-
-
-          update attributes for specific sample set -or-
-          update specific attribute for multiple sample sets
-
-        Create or update attribute
-
-        update_s: pd.Series with id -> attribute; update_s.name is attribute to update
+          To update a single attribute for a single entity, use:
+            pd.Series({attr_name:attr_value}, name=entity_name)
         """
-        # try rawls batch call if available
         if isinstance(attrs, pd.DataFrame):
             attr_list = []
             for i,row in attrs.iterrows():
-                attr_list.extend(
-                    [{'name':row.name, 'entityType':etype, 'operations': [{"op": "AddUpdateAttribute", "attributeName": i, "addUpdateAttribute":str(j)}]} for i,j in row.iteritems()]
-                )
+                attr_list.extend([{
+                    'name':row.name,
+                    'entityType':etype,
+                    'operations': [{"op": "AddUpdateAttribute", "attributeName": i, "addUpdateAttribute":str(j)} for i,j in row.iteritems()]
+                }])
         elif isinstance(attrs, pd.Series):
-            attr_list = [{'name':i, 'entityType':etype, 'operations': [{"op": "AddUpdateAttribute", "attributeName":attrs.name, "addUpdateAttribute":str(j)}]} for i,j in attrs.iteritems()]
+            attr_list = [{
+                'name':i,
+                'entityType':etype,
+                'operations': [{"op": "AddUpdateAttribute", "attributeName":attrs.name, "addUpdateAttribute":str(j)}]
+            } for i,j in attrs.iteritems()]
         else:
             raise ValueError('Unsupported input format.')
 
+        # try rawls batch call if available
         r = _batch_update_entities(self.namespace, self.workspace, attr_list)
         # try:  # TODO
         if r.status_code==204:
@@ -1257,8 +1266,8 @@ class WorkspaceManager(object):
         }
 
         """
-        r = self.list_configs()
-        if json_body['name'] not in [m['name'] for m in r.json()]:
+        configs = self.list_configs()
+        if json_body['name'] not in [m['name'] for m in configs]:
             # configuration doesn't exist -> name, namespace specified in json_body
             r = firecloud.api.create_workspace_config(self.namespace, self.workspace, json_body)
             if r.status_code==201:
