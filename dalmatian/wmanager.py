@@ -8,6 +8,7 @@ import firecloud.api
 from firecloud import fiss
 import iso8601
 import pytz
+from datetime import datetime
 
 #------------------------------------------------------------------------------
 #  Extension of firecloud.api functionality using the rawls (internal) API
@@ -450,9 +451,10 @@ class WorkspaceManager(object):
         for k,s in enumerate(submissions):
             print('\rFetching submission {}/{}'.format(k+1, len(submissions)), end='')
             if s['submissionEntity']['entityType']!=etype:
-                raise ValueError('Incompatible submission entity type: {}'.format(
+                print('\rIncompatible submission entity type: {}'.format(
                     s['submissionEntity']['entityType']))
-
+                print('\rSkipping : '+ s['submissionId'])
+                continue
             r = self.get_submission(s['submissionId'])
             ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
             for w in r['workflows']:
@@ -479,6 +481,13 @@ class WorkspaceManager(object):
         """Get status of lastest submission for samples in the workspace"""
         return self.get_entity_status('sample', configuration)
 
+    def get_pair_status(self, configuration):
+        """Get status of lastest submission for samples in the workspace"""
+        return self.get_entity_status('pair', configuration)
+
+    def get_pair_set_status(self, configuration):
+        """Get status of lastest submission for samples in the workspace"""
+        return self.get_entity_status('pair_set', configuration)
 
     def get_sample_set_status(self, configuration):
         """Get status of lastest submission for sample sets in the workspace"""
