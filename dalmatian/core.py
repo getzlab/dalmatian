@@ -1,5 +1,6 @@
 # Author: Francois Aguet
 
+from __future__ import print_function
 import os, sys, json
 import subprocess
 from datetime import datetime
