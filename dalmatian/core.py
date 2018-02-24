@@ -299,7 +299,7 @@ def compare_wdls(mnamespace1, mname1, mnamespace2, mname2):
     print('< {}:{}.v{}'.format(mnamespace1, mname1, v1))
     print('> {}:{}.v{}'.format(mnamespace2, mname2, v2))
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
-    d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE)
+    d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, executable='/bin/bash')
     print(d.stdout.decode())
 
 
@@ -315,21 +315,27 @@ def compare_wdl(mnamespace, mname, wdl_path):
     print('< {}'.format(wdl_path))
     print('> {}:{}.v{}'.format(mnamespace, mname, v))
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
-    d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE)
+    d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, executable='/bin/bash')
     print(d.stdout.decode())
 
 
-def redact_outdated_method_versions(method_namespace, method_name):
+def redact_method(method_namespace, method_name, mode='outdated'):
     """
+    Redact method in repository
 
+    mode: 'outdated', 'latest', 'all'
     """
+    assert mode in ['outdated', 'latest', 'all']
     r = firecloud.api.list_repository_methods()
     assert r.status_code==200
     r = r.json()
     r = [m for m in r if m['name']==method_name and m['namespace']==method_namespace]
-    versions = np.array([m['snapshotId'] for m in r])
-    print('Latest version: {}'.format(np.max(versions)))
-    versions = versions[versions!=np.max(versions)]
+    versions = np.sort([m['snapshotId'] for m in r])
+    print('Versions: {}'.format(', '.join(map(str, versions))))
+    if mode == 'outdated':
+        versions = versions[:-1]
+    elif mode == 'latest':
+        versions = versions[-1:]
     for i in versions:
         print('  * deleting version {}'.format(i))
         r = firecloud.api.delete_repository_method(method_namespace, method_name, i)
