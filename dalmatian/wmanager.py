@@ -99,9 +99,12 @@ class WorkspaceCollection(object):
 
 
 class WorkspaceManager(object):
-    def __init__(self, namespace, workspace, timezone='America/New_York'):
-        self.namespace = namespace
-        self.workspace = workspace
+    def __init__(self, namespace, workspace=None, timezone='America/New_York'):
+        if workspace is None:
+            self.namespace, self.workspace = namespace.split('/')
+        else:
+            self.namespace = namespace
+            self.workspace = workspace
         self.timezone  = timezone
 
 
@@ -143,6 +146,38 @@ class WorkspaceManager(object):
         return bucket_id
 
 
+    def upload_entities(self, etype, df, index=True):
+        """"""
+        buf = io.StringIO()
+        df.to_csv(buf, sep='\t', index=index)
+        s = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
+        buf.close()
+        et = etype.replace('_set', ' set')
+        if s.status_code==200:
+            if 'set' in etype:
+                if index:
+                    sets = df.index
+                else:
+                    sets = df[df.columns[0]]
+                print('Successfully imported {} {}s:'.format(len(np.unique(sets)), et))
+                for s in np.unique(sets):
+                    print('  * {} ({} {}s)'.format(s, np.sum(sets==s), et.replace(' set','')))
+            else:
+                print('Successfully imported {} {}s.'.format(df.shape[0], et))
+        else:
+            print(s.text)
+            raise ValueError('{} import failed.'.format(et.capitalize()))
+
+
+    def upload_participants(self, participant_ids):
+        """Upload a list of participants IDs"""
+        participant_df = pd.DataFrame(
+            data=np.unique(participant_ids),
+            columns=['entity:participant_id']
+        )
+        self.upload_entities('participant', participant_df, index=False)
+
+
     def upload_samples(self, df, participant_df=None, add_participant_samples=False):
         """
         Upload samples stored in a pandas DataFrame, and populate the required
@@ -154,120 +189,68 @@ class WorkspaceManager(object):
 
         # 1) upload participant IDs (without additional attributes)
         if participant_df is None:
-            participant_ids = np.unique(df['participant_id'])
-            participant_df = pd.DataFrame(data=participant_ids, columns=['entity:participant_id'])
+            self.upload_participants(np.unique(df['participant_id']))
         else:
             assert (participant_df.index.name=='entity:participant_id'
                 or participant_df.columns[0]=='entity:participant_id')
-
-        buf = io.StringIO()
-        participant_df.to_csv(buf, sep='\t', index=participant_df.index.name=='entity:participant_id')
-        s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
-        buf.close()
-        if s.status_code==200:
-            print('Successfully imported {} participants.'.format(participant_df.shape[0]))
-        else:
-            print(s.text)
-            raise ValueError('Participant import failed.')
+            self.upload_entities('participant', participant_df,
+                index=participant_df.index.name=='entity:participant_id')
 
         # 2) upload samples
         sample_df = df[df.columns[df.columns!='sample_set_id']].copy()
         sample_df.index.name = 'entity:sample_id'
-        buf = io.StringIO()
-        sample_df.to_csv(buf, sep='\t')
-        s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
-        buf.close()
-        if s.status_code==200:
-            print('Successfully imported {} samples.'.format(sample_df.shape[0]))
-        else:
-            print(s.text)
-            raise ValueError('Sample import failed.')
+        self.upload_entities('sample', sample_df)
 
-        # 3 upload sample sets
+        # 3) upload sample sets
         if 'sample_set_id' in df.columns:
-            set_df = pd.DataFrame(data=sample_df.index.values, columns=['sample_id'])
-            set_df.index = df['sample_set_id']
+            set_df = pd.DataFrame(data=sample_df.index.values, index=df['sample_set_id'], columns=['sample_id'])
             set_df.index.name = 'membership:sample_set_id'
-            buf = io.StringIO()
-            set_df.to_csv(buf, sep='\t')
-            s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
-            buf.close()
-            assert s.status_code==200
-            print('Successfully imported {} sample sets.'.format(len(df['sample_set_id'].unique())))
+            self.upload_entities('sample_set', set_df)
 
         if add_participant_samples:
             # 4) add participant.samples_
             print('  * The FireCloud data model currently does not provide participant.samples\n',
                   '    Adding "participant.samples_" as an explicit attribute.', sep='')
-            self.update_participant_samples()
+            self.update_participant_entities('sample')
 
 
-    def upload_participants(self, participant_ids):
-        """Upload a list of participants IDs"""
-        participant_df = pd.DataFrame(data=np.unique(participant_ids), columns=['entity:participant_id'])
-        buf = io.StringIO()
-        participant_df.to_csv(buf, sep='\t', index=participant_df.index.name=='entity:participant_id')
-        s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
-        buf.close()
-        assert s.status_code==200
-        print('Successfully imported participants.')
+    def update_participant_entities(self, etype):
+        """Attach entities (samples or pairs) to participants"""
+
+        # get etype -> participant mapping
+        if etype=='sample':
+            df = self.get_samples()[['participant']]
+        elif etype=='pair':
+            df = self.get_pairs()[['participant']]
+        else:
+            raise ValueError('Entity type {} not supported'.format(etype))
+
+        entitites_dict = {k:g.index.values for k,g in df.groupby('participant')}
+        participant_ids = np.unique(df['participant'])
+
+        for j,k in enumerate(participant_ids):
+            print('\r    Updating {}s for participant {}/{}'.format(etype, j+1, len(participant_ids)), end='')
+            attr_dict = {
+                "{}s_".format(etype): {
+                    "itemsType": "EntityReference",
+                    "items": [{"entityType": etype, "entityName": i} for i in entitites_dict[k]]
+                }
+            }
+            attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
+            assert r.status_code==200
+        print('\n    Finished attaching {}s to {} participants'.format(etype, len(participant_ids)))
 
 
     def update_participant_samples(self):
         """Attach samples to participants"""
-        df = self.get_samples()[['participant']]
-        samples_dict = {k:g.index.values for k,g in df.groupby('participant')}
-
-        participant_ids = np.unique(df['participant'])
-        for j,k in enumerate(participant_ids):
-            print('\r    Updating samples for participant {}/{}'.format(j+1,len(participant_ids)), end='')
-            attr_dict = {
-                "samples_": {
-                    "itemsType": "EntityReference",
-                    "items": [{"entityType": "sample", "entityName": i} for i in samples_dict[k]]
-                }
-            }
-            attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
-            assert r.status_code==200
-        print('\n    Finished updating participants in {}/{}'.format(self.namespace, self.workspace))
+        self.update_participant_entities('sample')
 
 
     def update_participant_samples_and_pairs(self):
         """Attach samples and pairs to participants"""
-        df = self.get_samples()[['participant']]
-        samples_dict = {k:g.index.values for k,g in df.groupby('participant')}
-
-        participant_ids = np.unique(df['participant'])
-        for j,k in enumerate(participant_ids):
-            print('\r    Updating samples for participant {}/{}'.format(j+1,len(participant_ids)), end='')
-            attr_dict = {
-                "samples_": {
-                    "itemsType": "EntityReference",
-                    "items": [{"entityType": "sample", "entityName": i} for i in samples_dict[k]]
-                }
-            }
-            attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
-            assert r.status_code==200
-        print('\n    Finished attaching samples to participants in {}/{}'.format(self.namespace, self.workspace))
-
-        df = self.get_pairs()[['participant']]
-        pairs_dict = {k: g.index.values for k, g in df.groupby('participant')}
-
-        participant_ids = np.unique(df['participant'])
-        for j, k in enumerate(participant_ids):
-            print('\r    Updating pairs for participant {}/{}'.format(j + 1, len(participant_ids)), end='')
-            attr_dict = {
-                "pairs_": {
-                    "itemsType": "EntityReference",
-                    "items": [{"entityType": "pair", "entityName": i} for i in pairs_dict[k]]
-                }
-            }
-            attrs = [firecloud.api._attr_set(i, j) for i, j in attr_dict.items()]
-            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
-            assert r.status_code == 200
-        print('\n    Finished attaching pairs to participants in {}/{}'.format(self.namespace, self.workspace))
+        self.update_participant_entities('sample')
+        self.update_participant_entities('pair')
 
 
     def make_pairs(self, sample_set_id=None):
@@ -276,7 +259,7 @@ class WorkspaceManager(object):
         Requires sample_type sample level annotation 'Normal' or 'Tumor'
         """
         # get data from sample set or all samples
-        if sample_set_id == None:
+        if sample_set_id is None:
             df = self.get_samples()
         else:
             df = self.get_sample_attributes_in_set(sample_set_id)
@@ -298,25 +281,19 @@ class WorkspaceManager(object):
                     pair_normals.append(s)
                     pair_ids.append(i + '-' + s)
                     participant_pair_ids.append(patient)
-        columns = ['entity:pair_id', 'case_sample', 'control_sample', 'participant']
-        pair_df = pd.DataFrame(index=pair_ids, columns=columns)
-        pair_df['entity:pair_id'] = pair_ids
-        pair_df['case_sample'] = pair_tumors
-        pair_df['control_sample'] = pair_normals
-        pair_df['participant'] = participant_pair_ids
-        buf = io.StringIO()
-        pair_df.to_csv(buf, sep='\t', index=False)
-        s = firecloud.api.upload_entities_tsv(self.namespace, self.workspace, buf)
-        buf.close()
-        if s.status_code == 200:
-            print('Successfully imported {} pairs'.format(pair_df.shape[0]))
-        else:
-            print(s.text)
-            raise ValueError('Pair import failed.')
+        pair_df = pd.DataFrame(
+            np.array([pair_tumors, pair_normals, participant_pair_ids]).T,
+            columns=['case_sample', 'control_sample', 'participant'],
+            index=pair_ids
+        )
+        pair_df.index.name = 'entity:pair_id'
+        self.upload_entities('pair', pair_df)
 
 
-    def update_sample_attributes(self, sample_id, attrs):
+    def update_sample_attributes(self, attrs, sample_id=None):
         """Set or update attributes in attrs (pd.Series or pd.DataFrame)"""
+        if sample_id is not None and isinstance(attrs, dict):
+            attrs = pd.DataFrame(attrs, index=[sample_id])
         self.update_entity_attributes('sample', attrs)
 
 
@@ -336,8 +313,9 @@ class WorkspaceManager(object):
         """
         Set or update workspace attributes. Wrapper for API 'set' call
         """
+        # attrs must be list:
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-        r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)  # attrs must be list
+        r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)
         assert r.status_code==200
         print('Successfully updated workspace attributes in {}/{}'.format(self.namespace, self.workspace))
 
@@ -432,6 +410,9 @@ class WorkspaceManager(object):
         if workflow_id is None:
             s = self.get_submission(submission_id)
             assert len(s['workflows'])==1
+            if 'workflowId' not in s['workflows'][0]:
+                print('No workflow ID found for this submission.')
+                return
             workflow_id = s['workflows'][0]['workflowId']
         metadata = self.get_workflow_metadata(submission_id, workflow_id)
         for task_name in metadata['calls']:
@@ -482,17 +463,20 @@ class WorkspaceManager(object):
         """Get status of lastest submission for samples in the workspace"""
         return self.get_entity_status('sample', configuration)
 
-    def get_pair_status(self, configuration):
-        """Get status of lastest submission for samples in the workspace"""
-        return self.get_entity_status('pair', configuration)
-
-    def get_pair_set_status(self, configuration):
-        """Get status of lastest submission for samples in the workspace"""
-        return self.get_entity_status('pair_set', configuration)
 
     def get_sample_set_status(self, configuration):
         """Get status of lastest submission for sample sets in the workspace"""
         return self.get_entity_status('sample_set', configuration)
+
+
+    def get_pair_status(self, configuration):
+        """Get status of lastest submission for pairs in the workspace"""
+        return self.get_entity_status('pair', configuration)
+
+
+    def get_pair_set_status(self, configuration):
+        """Get status of lastest submission for pair sets in the workspace"""
+        return self.get_entity_status('pair_set', configuration)
 
 
     def patch_attributes(self, cnamespace, configuration, dry_run=False, entity='sample'):
@@ -638,7 +622,10 @@ class WorkspaceManager(object):
         submissions = self.list_submissions(config=config)
 
         # filter by sample
-        submissions = [s for s in submissions if s['submissionEntity']['entityName']==sample_id and 'Succeeded' in list(s['workflowStatuses'].keys())]
+        submissions = [s for s in submissions
+            if s['submissionEntity']['entityName']==sample_id
+            and 'Succeeded' in list(s['workflowStatuses'].keys())
+        ]
 
         outputs_df = []
         for s in submissions:
@@ -776,14 +763,16 @@ class WorkspaceManager(object):
                 to_cnamespace, to_config, old_version))
 
         # copy config to repo
-        r = firecloud.api.copy_config_to_repo(self.namespace, self.workspace, from_cnamespace, from_config, to_cnamespace, to_config)
+        r = firecloud.api.copy_config_to_repo(self.namespace, self.workspace,
+                from_cnamespace, from_config, to_cnamespace, to_config)
         assert r.status_code==200
         print("Successfully copied {}/{}. New SnapshotID: {}".format(to_cnamespace, to_config, r.json()['snapshotId']))
 
         # make configuration public
         if public:
             print('  * setting public read access.')
-            r = firecloud.api.update_repository_config_acl(to_cnamespace, to_config, r.json()['snapshotId'], [{'role': 'READER', 'user': 'public'}])
+            r = firecloud.api.update_repository_config_acl(to_cnamespace, to_config,
+                    r.json()['snapshotId'], [{'role': 'READER', 'user': 'public'}])
 
         # delete old version
         if old_version is not None:
@@ -799,7 +788,8 @@ class WorkspaceManager(object):
         if len(c)==0:
             raise ValueError('Configuration "{}/{}" not found (name must match exactly).'.format(cnamespace, cname))
         c = c[np.argmax([i['snapshotId'] for i in c])]
-        r = firecloud.api.copy_config_from_repo(self.namespace, self.workspace, cnamespace, cname, c['snapshotId'], cnamespace, cname)
+        r = firecloud.api.copy_config_from_repo(self.namespace, self.workspace,
+            cnamespace, cname, c['snapshotId'], cnamespace, cname)
         if r.status_code==201:
             print('Successfully imported configuration "{}/{}" (SnapshotId {})'.format(cnamespace, cname, c['snapshotId']))
         else:
@@ -810,13 +800,13 @@ class WorkspaceManager(object):
     #  Methods for querying entities
     #-------------------------------------------------------------------------
     def _get_entities_query(self, etype, page, page_size=1000):
-        """
-        Wrapper for firecloud.api.get_entities_query
-        """
+        """Wrapper for firecloud.api.get_entities_query"""
         r = firecloud.api.get_entities_query(self.namespace, self.workspace,
                 etype, page=page, page_size=page_size)
-        assert r.status_code==200
-        return r.json()
+        if r.status_code==200:
+            return r.json()
+        else:
+            print(r.text)
 
 
     def get_entities(self, etype, page_size=1000):
@@ -834,6 +824,8 @@ class WorkspaceManager(object):
         # convert to DataFrame
         df = pd.DataFrame({i['name']:i['attributes'] for i in all_entities}).T
         df.index.name = etype+'_id'
+        # convert JSON to lists; assumes that values are stored in 'items'
+        df = df.applymap(lambda x: x['items'] if isinstance(x, dict) and 'items' in x else x)
         return df
 
 
@@ -856,91 +848,64 @@ class WorkspaceManager(object):
     def get_participants(self):
         """Get DataFrame with participants and their attributes"""
         df = self.get_entities('participant')
+        # convert sample lists from JSON
+        df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
+                            if np.all(pd.notnull(x)) else x)
         return df
 
 
     def get_sample_sets(self):
         """Get DataFrame with sample sets and their attributes"""
-        r = firecloud.api.get_entities(self.namespace, self.workspace, 'sample_set')
-        assert r.status_code==200
-        r = r.json()
-
-        # convert JSON to table
-        sample_set_ids = [i['name'] for i in r]
-        columns = np.unique([k for s in r for k in s['attributes'].keys()])
-        df = pd.DataFrame(index=sample_set_ids, columns=columns)
-        for s in r:
-            for c in columns:
-                if c in s['attributes']:
-                    if isinstance(s['attributes'][c], dict):
-                        df.loc[s['name'], c] = [i['entityName'] if 'entityName' in i else i for i in s['attributes'][c]['items']]
-                    else:
-                        df.loc[s['name'], c] = s['attributes'][c]
+        df = self.get_entities('sample_set')
+        # convert sample lists from JSON
+        df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
+                            if np.all(pd.notnull(x)) else x)
         return df
 
 
     #-------------------------------------------------------------------------
-    #  Methods for updating entities
+    #  Methods for updating entity sets
     #-------------------------------------------------------------------------
-    def update_sample_set(self, sample_set_id, sample_ids):
-        """Update (or create) a sample set"""
-        r = firecloud.api.get_entity(self.namespace, self.workspace, 'sample_set', sample_set_id)
+    def update_entity_set(self, etype, set_id, entity_ids):
+        """Update or create an entity set"""
+        assert etype in ['sample', 'pair', 'participant']
+        r = firecloud.api.get_entity(self.namespace, self.workspace, etype+'_set', set_id)
         if r.status_code==200:  # exists -> update
             r = r.json()
-            items_dict = r['attributes']['samples']
-            items_dict['items'] = [{'entityName': i, 'entityType': 'sample'} for i in sample_ids]
-            attrs = [{'addUpdateAttribute': items_dict, 'attributeName': 'samples', 'op': 'AddUpdateAttribute'}]
-            r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample_set', sample_set_id, attrs)
+            items_dict = r['attributes']['{}s'.format(etype)]
+            items_dict['items'] = [{'entityName': i, 'entityType': etype} for i in entity_ids]
+            attrs = [{
+                'addUpdateAttribute': items_dict,
+                'attributeName': '{}s'.format(etype),
+                'op': 'AddUpdateAttribute'
+            }]
+            r = firecloud.api.update_entity(self.namespace, self.workspace, etype+'_set', set_id, attrs)
             if r.status_code==200:
-                print('Sample set "{}" ({} samples) successfully updated.'.format(sample_set_id, len(sample_ids)))
+                print('{} set "{}" ({} {}s) successfully updated.'.format(
+                    etype.capitalize(), set_id, len(entity_ids), etype))
             else:
                 print(r.text)
-        else:  # create
-            set_df = pd.DataFrame(data=np.c_[[sample_set_id]*len(sample_ids), sample_ids], columns=['membership:sample_set_id', 'sample_id'])
-            buf = io.StringIO()
-            set_df.to_csv(buf, sep='\t', index=False)
-            r = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
-            buf.close()
-            assert r.status_code==200
-            print('Sample set "{}" ({} samples) successfully created.'.format(sample_set_id, len(sample_ids)))
+        else:
+            set_df = pd.DataFrame(
+                data=np.c_[[set_id]*len(entity_ids), entity_ids],
+                columns=['membership:{}_set_id'.format(etype), '{}_id'.format(etype)]
+            )
+            self.upload_entities('{}_set'.format(etype), set_df, index=False)
+
+
+    def update_sample_set(self, sample_set_id, sample_ids):
+        """Update or create a sample set"""
+        self.update_entity_set('sample', sample_set_id, sample_ids)
 
 
     def update_pair_set(self, pair_set_id, pair_ids):
-        """Update (or create) a pair set"""
-        r = firecloud.api.get_entity(self.namespace, self.workspace, 'pair_set_id', pair_set_id)
-        if r.status_code==200:  # exists -> update
-            r = r.json()
-            items_dict = r['attributes']['pairs']
-            items_dict['items'] = [{'entityName': i, 'entityType': 'pair'} for i in pair_ids]
-            attrs = [{'addUpdateAttribute': items_dict, 'attributeName': 'pairs', 'op': 'AddUpdateAttribute'}]
-            r = firecloud.api.update_entity(self.namespace, self.workspace, 'pair_set', pair_set_id, attrs)
-            if r.status_code==200:
-                print('Pair set "{}" ({} pairs) successfully updated.'.format(pair_set_id, len(pair_ids)))
-            else:
-                print(r.text)
-        else:  # create
-            set_df = pd.DataFrame(data=np.c_[[pair_set_id]*len(pair_ids), pair_ids], columns=['membership:pair_set_id', 'pair_id'])
-            buf = io.StringIO()
-            set_df.to_csv(buf, sep='\t', index=False)
-            r = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
-            buf.close()
-            assert r.status_code==200
-            print('Pair set "{}" ({} pairs) successfully created.'.format(pair_set_id, len(pair_ids)))
+        """Update or create a pair set"""
+        self.update_entity_set('pair', pair_set_id, pair_ids)
 
 
     def update_participant_set(self, participant_set_id, participant_ids):
-        """Update (or create) a participant set"""
-        r = firecloud.api.get_entity(self.namespace, self.workspace, 'participant_set', participant_set_id)
-        if r.status_code==200:  # exists -> update
-            raise ValueError('not implemented')
-        else:  # create
-            set_df = pd.DataFrame(data=np.c_[[participant_set_id]*len(participant_ids), participant_ids], columns=['membership:participant_set_id', 'participant_id'])
-            buf = io.StringIO()
-            set_df.to_csv(buf, sep='\t', index=False)
-            r = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
-            buf.close()
-            assert r.status_code==200
-            print('Participant set "{}" ({} participants) successfully created.'.format(participant_set_id, len(participant_ids)))
+        """Update or create a participant set"""
+        self.update_entity_set('participant', participant_set_id, participant_ids)
 
 
     def update_super_set(self, super_set_id, sample_set_ids, sample_ids):
@@ -971,67 +936,140 @@ class WorkspaceManager(object):
 
 
     #-------------------------------------------------------------------------
-    #  Methods for deleting entities
+    #  Methods for deleting entities and attributes
     #-------------------------------------------------------------------------
-    def delete_entity_attributes(self, delete_s, etype, delete_files=False):
+    def delete_entity_attributes(self, etype, attrs, entity_id=None, delete_files=False, dry_run=False):
         """
-        Delete sample attributes and their associated data
+        Delete entity attributes and (optionally) their associated data
 
-        delete_s: pd.Series with sample_id -> path; delete_s.name is attribute to delete
+        Examples
+
+          To delete an attribute for all samples:
+            samples_df = wm.get_samples()
+            wm.delete_entity_attributes('sample', samples_df[attr_name])
+
+          To delete multiple attributes a single sample:
+            wm.delete_entity_attributes('sample', attributes_list, entity_id=sample_id)
+
+        WARNING: This action is not reversible. Be careful!
         """
-        op = [{'attributeName':delete_s.name, 'op':'RemoveAttribute'}]
-        attrs = [{'name':i, 'entityType':etype, 'operations': op} for i in delete_s.index]
-        r = _batch_update_entities(self.namespace, self.workspace, attrs)
+        assert isinstance(attrs, (list, pd.Series, pd.DataFrame))
+        et = etype.replace('_set', ' set')
+
+        if delete_files:
+            assert isinstance(attrs, (pd.DataFrame, pd.Series))
+            file_list = attrs.values.flatten()
+            if dry_run:
+                print('[dry-run] the following files will be deleted:')
+                print('\n'.join(file_list))
+                return
+            else:
+                gs_delete(file_list)
+
+        if isinstance(attrs, pd.DataFrame):  # delete index x column combinations
+            attr_list = [{
+                'name':i,
+                'entityType':etype,
+                'operations':[{'attributeName':c, 'op':'RemoveAttribute'} for c in attrs]
+            } for i in attrs.index]
+            msg = "Successfully deleted attributes {} for {} {}s.".format(attrs.columns, attrs.shape[0], et)
+        elif isinstance(attrs, pd.Series) and attrs.name is not None:  # delete index x attr.name
+            # assume attrs.name is attribute name
+            attr_list = [{
+                'name':i,
+                'entityType':etype,
+                'operations':[{'attributeName':attrs.name, 'op':'RemoveAttribute'}]
+            } for i in attrs.index]
+            msg = "Successfully deleted attribute {} for {} {}s.".format(attrs.name, attrs.shape[0], et)
+        elif isinstance(attrs, list) and entity_id is not None:
+            attr_list = [{
+                'name':entity_id,
+                'entityType':etype,
+                'operations':[{'attributeName':i, 'op':'RemoveAttribute'} for i in attrs]
+            }]
+            msg = "Successfully deleted attributes {} for {} {}.".format(attrs, et, entity_id)
+        else:
+            raise ValueError('Input type is not supported.')
+
+        # TODO: try
+        r = _batch_update_entities(self.namespace, self.workspace, attr_list)
         if r.status_code==204:
-            print("Successfully deleted attribute '{}' for {} samples.".format(delete_s.name, len(delete_s)))
+            print(msg)
+        else:
+            print(r.text)
+        # except:  # rawls API not available
+        #     if isinstance(attrs, str):
+        #         rm_list = [{"op": "RemoveAttribute", "attributeName": attrs}]
+        #     elif isinstance(attrs, Iterable):
+        #         rm_list = [{"op": "RemoveAttribute", "attributeName": i} for i in attrs]
+        #     r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, rm_list)
+        #         assert r.status_code==200
 
-            if delete_files:
-                print('Deleting files')
-                gs_delete(delete_s)
+
+    def delete_sample_attributes(attrs, entity_id=None, delete_files=False, dry_run=False):
+        """Delete sample attributes and (optionally) their associated data"""
+        self.delete_entity_attributes('sample', attrs,
+                entity_id=entity_id, delete_files=delete_files, dry_run=dry_run)
+
+
+    def delete_sample_set_attributes(attrs, entity_id=None, delete_files=False, dry_run=False):
+        """Delete sample set attributes and (optionally) their associated data"""
+        self.delete_entity_attributes('sample_set', attrs,
+                entity_id=entity_id, delete_files=delete_files, dry_run=dry_run)
+
+
+    def delete_participant_attributes(attrs, entity_id=None, delete_files=False, dry_run=False):
+        """Delete participant attributes and (optionally) their associated data"""
+        self.delete_entity_attributes('participant', attrs,
+                entity_id=entity_id, delete_files=delete_files, dry_run=dry_run)
+
+
+    def delete_entity(self, etype, entity_ids):
+        """Delete entity or list of entities"""
+        r = firecloud.api.delete_entity_type(self.namespace, self.workspace, etype, entity_ids)
+        if r.status_code==204:
+            print('{}(s) {} successfully deleted.'.format(etype.replace('_set', ' set').capitalize(), entity_ids))
         else:
             print(r.text)
 
-    # def delete_entity_attributes(self, etype, ename, attrs, check=True):
-    #     """
-    #     Delete attributes
-    #     """
-    #     if isinstance(attrs, str):
-    #         rm_list = [{"op": "RemoveAttribute", "attributeName": attrs}]
-    #     elif isinstance(attrs, Iterable):
-    #         rm_list = [{"op": "RemoveAttribute", "attributeName": i} for i in attrs]
-    #     r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, rm_list)
-    #     if check:
-    #         assert r.status_code==200
-    #     else:
-    #         return r
 
     def delete_sample(self, sample_ids):
         """Delete sample or list of samples"""
-        r = firecloud.api.delete_sample(self.namespace, self.workspace, sample_ids)
-        assert r.status_code==204
-        # IF LAST SAMPLE, ALSO NEED TO DELETE PARTICIPANT -- no longer seems to be the case?
-
-
-    def delete_participant(self, participant_ids):
-        """
-        Delete participant or list of participants
-        """
-        r = firecloud.api.delete_participant(self.namespace, self.workspace, participant_ids)
-        assert r.status_code==204
+        self.delete_entity('sample', sample_ids)
 
 
     def delete_sample_set(self, sample_set_id):
-        """Delete sample set"""
-        r = firecloud.api.delete_sample_set(self.namespace, self.workspace, sample_set_id)
-        assert r.status_code==204
-        print('Sample set "{}" successfully deleted.'.format(sample_set_id))
+        """Delete sample set(s)"""
+        self.delete_entity('sample_set', sample_set_id)
+
+
+    def delete_participant(self, participant_ids, delete_dependencies=False):
+        """Delete participant or list of participants"""
+        r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'participant', participant_ids)
+        if r.status_code==204:
+            print('Participant(s) {} successfully deleted.'.format(participant_ids))
+        elif r.status_code==409:
+            if delete_dependencies:
+                r2 = firecloud.api.delete_entities(self.namespace, self.workspace, r.json())
+                if r2.status_code==204:
+                    print('Participant(s) {} and dependent entities successfully deleted.'.format(participant_ids))
+                else:
+                    print(r2.text)
+            else:
+                print('The following entities must be deleted before the participant(s) can be deleted:')
+                print(r.text)
+        else:
+            print(r.text)
+
+
+    def delete_pair_set(self, pair_id):
+        """Delete pair(s)"""
+        self.delete_entity('pair', pair_id)
 
 
     def delete_pair_set(self, pair_set_id):
-        """Delete pair set"""
-        r = firecloud.api.delete_pair_set(self.namespace, self.workspace, pair_set_id)
-        assert r.status_code==204
-        print('Pair set "{}" successfully deleted.'.format(pair_set_id))
+        """Delete pair set(s)"""
+        self.delete_entity('pair_set', pair_set_id)
 
 
     #-------------------------------------------------------------------------
@@ -1128,19 +1166,13 @@ class WorkspaceManager(object):
                 print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
         else:
             print(r.text)
-
-        # # revert to public API:
-        # def update_entity_attributes(self, etype, ename, attr_dict):
-        #     """
-        #     Set or update attributes in attr_dict
-        #     """
+        # except:  # revert to public API
         #     attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
         #     r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, attrs)
         #     if r.status_code==200:
         #         print('Successfully updated {}.'.format(ename))
         #     else:
         #         print(r.text)
-        #
 
 
     def update_configuration(self, json_body):
@@ -1181,11 +1213,11 @@ class WorkspaceManager(object):
         Get version of a configuration and compare to latest available in repository
         """
         r = self.list_configs()
-        r = [i for i in r if i['name']==config_name][0]
+        r = [i for i in r if i['name']==config_name][0]['methodRepoMethod']
         # method repo version
-        mrversion = get_method_version(r['methodRepoMethod']['methodNamespace'], r['methodRepoMethod']['methodName'])
-        print('Method for config. {0}: {1} version {2} (latest: {3})'.format(config_name, r['methodRepoMethod']['methodName'], r['methodRepoMethod']['methodVersion'], mrversion))
-        return r['methodRepoMethod']['methodVersion']
+        mrversion = get_method_version(r['methodNamespace'], r['methodName'])
+        print('Method for config. {}: {} version {} (latest: {})'.format(config_name, r['methodName'], r['methodVersion'], mrversion))
+        return r['methodVersion']
 
 
     def get_configs(self, latest_only=False):
@@ -1204,9 +1236,7 @@ class WorkspaceManager(object):
 
 
     def create_submission(self, cnamespace, config, entity, etype, expression=None, use_callcache=True):
-        """
-
-        """
+        """Create submission"""
         r = firecloud.api.create_submission(self.namespace, self.workspace,
             cnamespace, config, entity, etype, expression=expression, use_callcache=use_callcache)
         if r.status_code==201:
