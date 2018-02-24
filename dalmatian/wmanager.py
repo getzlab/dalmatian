@@ -10,6 +10,8 @@ from firecloud import fiss
 import iso8601
 import pytz
 from datetime import datetime
+from .core import *
+
 
 #------------------------------------------------------------------------------
 #  Extension of firecloud.api functionality using the rawls (internal) API
@@ -1006,19 +1008,19 @@ class WorkspaceManager(object):
         #         assert r.status_code==200
 
 
-    def delete_sample_attributes(attrs, entity_id=None, delete_files=False, dry_run=False):
+    def delete_sample_attributes(self, attrs, entity_id=None, delete_files=False, dry_run=False):
         """Delete sample attributes and (optionally) their associated data"""
         self.delete_entity_attributes('sample', attrs,
                 entity_id=entity_id, delete_files=delete_files, dry_run=dry_run)
 
 
-    def delete_sample_set_attributes(attrs, entity_id=None, delete_files=False, dry_run=False):
+    def delete_sample_set_attributes(self, attrs, entity_id=None, delete_files=False, dry_run=False):
         """Delete sample set attributes and (optionally) their associated data"""
         self.delete_entity_attributes('sample_set', attrs,
                 entity_id=entity_id, delete_files=delete_files, dry_run=dry_run)
 
 
-    def delete_participant_attributes(attrs, entity_id=None, delete_files=False, dry_run=False):
+    def delete_participant_attributes(self, attrs, entity_id=None, delete_files=False, dry_run=False):
         """Delete participant attributes and (optionally) their associated data"""
         self.delete_entity_attributes('participant', attrs,
                 entity_id=entity_id, delete_files=delete_files, dry_run=dry_run)
