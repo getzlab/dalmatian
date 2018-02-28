@@ -852,7 +852,7 @@ class WorkspaceManager(object):
         df = self.get_entities('participant')
         # convert sample lists from JSON
         df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
-                            if np.all(pd.notnull(x)) else x)
+                            if np.all(pd.notnull(x)) and isinstance(x, list) else x)
         return df
 
 
@@ -861,7 +861,7 @@ class WorkspaceManager(object):
         df = self.get_entities('sample_set')
         # convert sample lists from JSON
         df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
-                            if np.all(pd.notnull(x)) else x)
+                            if np.all(pd.notnull(x)) and isinstance(x, list) else x)
         return df
 
 
