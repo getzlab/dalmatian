@@ -11,16 +11,39 @@ import firecloud.api
 import iso8601
 import argparse
 import multiprocessing as mp
-
 from .__about__ import __version__
 
 # Collection of high-level wrapper functions for FireCloud API
 
+class FirecloudError(ValueError):
+    pass
 
+def check_response_status(response, code):
+    if response.status_code != code:
+        try:
+            data = response.json()
+            if 'message' in data:
+                raise FirecloudError(
+                    "Status %d : %s" % (
+                        response.status_code,
+                        data['message'].strip()
+                    )
+                )
+        except FirecloudError:
+            raise
+        except:
+            pass
+        raise FirecloudError(
+            "Status %d : %s" % (
+                response.status_code,
+                response.text.strip()
+            )
+        )
 
 #------------------------------------------------------------------------------
 #  Helper functions for processing timestamps
 #------------------------------------------------------------------------------
+
 
 def convert_time(x):
     return datetime.timestamp(iso8601.parse_date(x))
@@ -188,7 +211,7 @@ def list_methods(namespace=None):
     List all methods in the repository
     """
     r = firecloud.api.list_repository_methods()
-    assert r.status_code==200
+    check_response_status(r,200)
     r = r.json()
 
     if namespace is not None:
@@ -202,7 +225,7 @@ def get_method(namespace, name):
     Get all available versions of a method from the repository
     """
     r = firecloud.api.list_repository_methods()
-    assert r.status_code==200
+    check_response_status(r,200)
     r = r.json()
     r = [m for m in r if m['name']==name and m['namespace']==namespace]
     return r
@@ -221,7 +244,7 @@ def list_configs(namespace=None):
     List all configurations in the repository
     """
     r = firecloud.api.list_repository_configs()
-    assert r.status_code==200
+    check_response_status(r,200)
     r = r.json()
 
     if namespace is not None:
@@ -235,7 +258,7 @@ def get_config(namespace, name):
     Get all versions of a configuration from the repository
     """
     r = firecloud.api.list_repository_configs()
-    assert r.status_code==200
+    check_response_status(r,200)
     r = r.json()
     r = [m for m in r if m['name']==name and m['namespace']==namespace]
     return r
@@ -254,7 +277,7 @@ def print_methods(namespace):
     Print all methods in a namespace
     """
     r = firecloud.api.list_repository_methods()
-    assert r.status_code==200
+    check_response_status(r,200)
     r = r.json()
     r = [m for m in r if m['namespace']==namespace]
     methods = np.unique([m['name'] for m in r])
@@ -267,7 +290,7 @@ def print_configs(namespace):
     Print all configurations in a namespace
     """
     r = firecloud.api.list_repository_configs()
-    assert r.status_code==200
+    check_response_status(r,200)
     r = r.json()
     r = [m for m in r if m['namespace']==namespace]
     configs = np.unique([m['name'] for m in r])
@@ -283,7 +306,7 @@ def get_wdl(method_namespace, method_name, snapshot_id=None):
         snapshot_id = get_method_version(method_namespace, method_name)
 
     r = firecloud.api.get_repository_method(method_namespace, method_name, snapshot_id)
-    assert r.status_code==200
+    check_response_status(r,200)
     return r.json()['payload']
 
 
@@ -327,7 +350,7 @@ def redact_method(method_namespace, method_name, mode='outdated'):
     """
     assert mode in ['outdated', 'latest', 'all']
     r = firecloud.api.list_repository_methods()
-    assert r.status_code==200
+    check_response_status(r,200)
     r = r.json()
     r = [m for m in r if m['name']==method_name and m['namespace']==method_namespace]
     versions = np.sort([m['snapshotId'] for m in r])
@@ -339,7 +362,7 @@ def redact_method(method_namespace, method_name, mode='outdated'):
     for i in versions:
         print('  * deleting version {}'.format(i))
         r = firecloud.api.delete_repository_method(method_namespace, method_name, i)
-        assert r.status_code==200
+        check_response_status(r,200)
 
 
 def update_method(namespace, method, synopsis, wdl_file, public=False, delete_old=True):
@@ -369,7 +392,7 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
     # delete old version
     if old_version is not None and delete_old:
         r = firecloud.api.delete_repository_method(namespace, method, old_version)
-        assert r.status_code==200
+        check_response_status(r,200)
         print("Successfully deleted SnapshotID {}.".format(old_version))
 
 
