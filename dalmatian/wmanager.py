@@ -1142,8 +1142,6 @@ class WorkspaceManager(object):
         check_response_status(r,204)
         if isinstance(attrs, pd.DataFrame):
             print("Successfully updated attributes '{}' for {} {}s.".format(attrs.columns.tolist(), attrs.shape[0], etype))
-        elif isinstance(attrs, pd.Series):
-            print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
         else:
             print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
         # except:  # revert to public API

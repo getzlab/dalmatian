@@ -381,8 +381,11 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
 
     # push new version
     r = firecloud.api.update_repository_method(namespace, method, synopsis, wdl_file)
-    check_response_status(r,201)
-    print("Successfully pushed {}/{}. New SnapshotID: {}".format(namespace, method, r.json()['snapshotId']))
+    try:
+        check_response_status(r,201)
+        print("Successfully pushed {}/{}. New SnapshotID: {}".format(namespace, method, r.json()['snapshotId']))
+    except FirecloudError as e:
+        raise ValueError("Update failed.") from e
 
     if public:
         print('  * setting public read access.')
