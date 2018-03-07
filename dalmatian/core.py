@@ -15,7 +15,7 @@ from .__about__ import __version__
 
 # Collection of high-level wrapper functions for FireCloud API
 
-class FirecloudError(ValueError):
+class FirecloudError(AssertionError):
     pass
 
 def check_response_status(response, code):
@@ -39,6 +39,8 @@ def check_response_status(response, code):
                 response.text.strip()
             )
         )
+    #for chaining
+    return response
 
 #------------------------------------------------------------------------------
 #  Helper functions for processing timestamps
