@@ -342,7 +342,7 @@ class WorkspaceManager(object):
         return self.get_samples()[idx]
 
 
-    def get_submission_status(self, filter_active=False, config=None, show_namespaces=False):
+    def get_submission_status(self, config=None, filter_active=True, show_namespaces=False):
         """
         Get status of all submissions in the workspace (replicates UI Monitor)
         """
