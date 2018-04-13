@@ -411,17 +411,17 @@ class WorkspaceManager(object):
         """Print status for a specific scatter job"""
         if workflow_id is None:
             s = self.get_submission(submission_id)
-            assert len(s['workflows'])==1
-            if 'workflowId' not in s['workflows'][0]:
-                print('No workflow ID found for this submission.')
-                return
-            workflow_id = s['workflows'][0]['workflowId']
-        metadata = self.get_workflow_metadata(submission_id, workflow_id)
-        for task_name in metadata['calls']:
-            if np.all(['shardIndex' in i for i in metadata['calls'][task_name]]):
-                print('Submission status ({}): {}'.format(task_name.split('.')[-1], metadata['status']))
-                s = pd.Series([s['backendStatus'] for s in metadata['calls'][task_name]])
-                print(s.value_counts().to_string())
+            for w in s['workflows']:
+                if 'workflowId' in w:
+                    print('\n{} ({}):'.format(w['workflowEntity']['entityName'], w['workflowId']))
+                    self.print_scatter_status(submission_id, workflow_id=w['workflowId'])
+        else:
+            metadata = self.get_workflow_metadata(submission_id, workflow_id)
+            for task_name in metadata['calls']:
+                if np.all(['shardIndex' in i for i in metadata['calls'][task_name]]):
+                    print('Submission status ({}): {}'.format(task_name.split('.')[-1], metadata['status']))
+                    s = pd.Series([s['backendStatus'] for s in metadata['calls'][task_name]])
+                    print(s.value_counts().to_string())
 
 
     def get_entity_status(self, etype, config):
