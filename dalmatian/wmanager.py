@@ -877,6 +877,25 @@ class WorkspaceManager(object):
                         df.loc[s['name'], c] = s['attributes'][c]
         return df
 
+    def get_pair_sets(self):
+            """Get DataFrame with sample sets and their attributes"""
+            r = firecloud.api.get_entities(self.namespace, self.workspace, 'pair_set')
+            assert r.status_code == 200
+            r = r.json()
+
+            # convert JSON to table
+            pair_set_ids = [i['name'] for i in r]
+            columns = np.unique([k for s in r for k in s['attributes'].keys()])
+            df = pd.DataFrame(index=pair_set_ids, columns=columns)
+            for s in r:
+                for c in columns:
+                    if c in s['attributes']:
+                        if isinstance(s['attributes'][c], dict):
+                            df.loc[s['name'], c] = [i['entityName'] if 'entityName' in i else i for i in
+                                                    s['attributes'][c]['items']]
+                        else:
+                            df.loc[s['name'], c] = s['attributes'][c]
+            return df
 
     #-------------------------------------------------------------------------
     #  Methods for updating entities
