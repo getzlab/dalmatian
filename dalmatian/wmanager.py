@@ -13,6 +13,14 @@ from datetime import datetime
 from .core import *
 
 
+def is_member(a, b):
+    # based on the matlab is_member function
+    bind = {}
+    for i, elt in enumerate(b):
+        if elt not in bind:
+            bind[elt] = i
+    return [bind.get(itm, np.nan) for itm in a]
+
 #------------------------------------------------------------------------------
 #  Extension of firecloud.api functionality using the rawls (internal) API
 #------------------------------------------------------------------------------
@@ -883,6 +891,12 @@ class WorkspaceManager(object):
                         else:
                             df.loc[s['name'], c] = s['attributes'][c]
             return df
+
+    def get_pairs_in_pair_set(self, pair_set):
+        df = self.get_pairs()
+        df = df[
+            ~np.isnan(is_member(df.index.values, self.get_pair_sets().loc[pair_set]['pairs']))]
+        return df
 
     #-------------------------------------------------------------------------
     #  Methods for updating entity sets
