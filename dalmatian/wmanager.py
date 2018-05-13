@@ -238,8 +238,8 @@ class WorkspaceManager(object):
         entitites_dict = {k:g.index.values for k,g in df.groupby('participant')}
         participant_ids = np.unique(df['participant'])
 
-        for j,k in enumerate(participant_ids):
-            print('\r    Updating {}s for participant {}/{}'.format(etype, j+1, len(participant_ids)), end='')
+        for n,k in enumerate(participant_ids, 1):
+            print('\r    Updating {}s for participant {}/{}'.format(etype, n, len(participant_ids)), end='')
             attr_dict = {
                 "{}s_".format(etype): {
                     "itemsType": "EntityReference",
@@ -420,16 +420,17 @@ class WorkspaceManager(object):
         if workflow_id is None:
             s = self.get_submission(submission_id)
             for w in s['workflows']:
-                if 'workflowId' in w:
+                if 'workflowId' in w and w['status']!='Succeeded':
                     print('\n{} ({}):'.format(w['workflowEntity']['entityName'], w['workflowId']))
                     self.print_scatter_status(submission_id, workflow_id=w['workflowId'])
         else:
             metadata = self.get_workflow_metadata(submission_id, workflow_id)
-            for task_name in metadata['calls']:
-                if np.all(['shardIndex' in i for i in metadata['calls'][task_name]]):
-                    print('Submission status ({}): {}'.format(task_name.split('.')[-1], metadata['status']))
-                    s = pd.Series([s['backendStatus'] for s in metadata['calls'][task_name]])
-                    print(s.value_counts().to_string())
+            if metadata['status']!='Succeeded':
+                for task_name in metadata['calls']:
+                    if np.all(['shardIndex' in i for i in metadata['calls'][task_name]]):
+                        print('Submission status ({}): {}'.format(task_name.split('.')[-1], metadata['status']))
+                        s = pd.Series([s['backendStatus'] for s in metadata['calls'][task_name]])
+                        print(s.value_counts().to_string())
 
 
     def get_entity_status(self, etype, config):
@@ -440,8 +441,8 @@ class WorkspaceManager(object):
 
         # get status of last run submission
         entity_dict = {}
-        for k,s in enumerate(submissions):
-            print('\rFetching submission {}/{}'.format(k+1, len(submissions)), end='')
+        for k,s in enumerate(submissions, 1):
+            print('\rFetching submission {}/{}'.format(k, len(submissions)), end='')
             if s['submissionEntity']['entityType']!=etype:
                 print('\rIncompatible submission entity type: {}'.format(
                     s['submissionEntity']['entityType']))
@@ -524,8 +525,8 @@ class WorkspaceManager(object):
 
             # for incomplete samples, go through submissions and assign outputs of completed tasks
             task_counts = defaultdict(int)
-            for n,sample_id in enumerate(incomplete_df.index):
-                print('\rPatching attributes for sample {}/{}'.format(n+1, incomplete_df.shape[0]), end='')
+            for n,sample_id in enumerate(incomplete_df.index, 1):
+                print('\rPatching attributes for sample {}/{}'.format(n, incomplete_df.shape[0]), end='')
 
                 try:
                     metadata = self.get_workflow_metadata(sample_status_df.loc[sample_id, 'submission_id'], sample_status_df.loc[sample_id, 'workflow_id'])
@@ -565,8 +566,8 @@ class WorkspaceManager(object):
             if np.any(error_ix):
                 print('Attributes from {} successful jobs were not written to database.'.format(len(error_ix)))
                 print('Patching attributes with outputs from latest successful run.')
-                for n,sample_set_id in enumerate(incomplete_df.index):
-                    print('\r  * Patching sample set {}/{}'.format(n+1, incomplete_df.shape[0]), end='')
+                for n,sample_set_id in enumerate(incomplete_df.index, 1):
+                    print('\r  * Patching sample set {}/{}'.format(n, incomplete_df.shape[0]), end='')
                     metadata = self.get_workflow_metadata(sample_set_status_df.loc[sample_set_id, 'submission_id'], sample_set_status_df.loc[sample_set_id, 'workflow_id'])
                     if 'outputs' in metadata and len(metadata['outputs'])!=0 and not dry_run:
                         attr = {output_map[k.split('.')[-1]]:t for k,t in metadata['outputs'].items()}
@@ -594,8 +595,8 @@ class WorkspaceManager(object):
             ix = status_df.index
 
         state_df = pd.DataFrame(0, index=ix, columns=workflow_tasks)
-        for k,i in enumerate(ix):
-            print('\rFetching metadata for sample {}/{}'.format(k+1, len(ix)), end='')
+        for k,i in enumerate(ix, 1):
+            print('\rFetching metadata for sample {}/{}'.format(k, len(ix)), end='')
             metadata = self.get_workflow_metadata(status_df.loc[i, 'submission_id'], status_df.loc[i, 'workflow_id'])
             state_df.loc[i] = [metadata['calls'][t][-1]['executionStatus'] if t in metadata['calls'] else 'Waiting' for t in workflow_tasks]
         print()
@@ -614,8 +615,8 @@ class WorkspaceManager(object):
         df = state_df[state_df[task_name]==-1]
         fail_idx = df.index
         stderrs = []
-        for n,i in enumerate(fail_idx):
-            print('\rFetching stderr for task {}/{}'.format(n+1, len(fail_idx)), end='\r')
+        for n,i in enumerate(fail_idx, 1):
+            print('\rFetching stderr for task {}/{}'.format(n, len(fail_idx)), end='\r')
             metadata = self.get_workflow_metadata(state_df.loc[i, 'submission_id'], state_df.loc[i, 'workflow_id'])
             stderr_path = metadata['calls'][[i for i in metadata['calls'].keys() if i.split('.')[1]==task_name][0]][-1]['stderr']
             s = subprocess.check_output('gsutil cat '+stderr_path, shell=True).decode()
@@ -675,8 +676,8 @@ class WorkspaceManager(object):
         # for successful jobs, get metadata and count attempts
         status_df = status_df[status_df['status']=='Succeeded'].copy()
         metadata_dict = {}
-        for k,(i,row) in enumerate(status_df.iterrows()):
-            print('\rFetching metadata {}/{}'.format(k+1,status_df.shape[0]), end='')
+        for k,(i,row) in enumerate(status_df.iterrows(), 1):
+            print('\rFetching metadata {}/{}'.format(k,status_df.shape[0]), end='')
             fetch = True
             while fetch:  # improperly dealing with 500s here...
                 try:
@@ -872,6 +873,7 @@ class WorkspaceManager(object):
                             if np.all(pd.notnull(x)) and isinstance(x, list) else x)
         return df
 
+
     def get_pair_sets(self):
             """Get DataFrame with sample sets and their attributes"""
             r = firecloud.api.get_entities(self.namespace, self.workspace, 'pair_set')
@@ -891,6 +893,7 @@ class WorkspaceManager(object):
                         else:
                             df.loc[s['name'], c] = s['attributes'][c]
             return df
+
 
     def get_pairs_in_pair_set(self, pair_set):
         df = self.get_pairs()
@@ -1163,14 +1166,14 @@ class WorkspaceManager(object):
 
         attrs:
           pd.DataFrame: update entities x attributes
-          pd.Series:    update attribute (attr.name)
-                        for multiple entities (attr.index)
+          pd.Series:    update attribute (attrs.name)
+                        for multiple entities (attrs.index)
 
           To update multiple attributes for a single entity, use:
             pd.DataFrame(attr_dict, index=[entity_name]))
 
           To update a single attribute for a single entity, use:
-            pd.Series({attr_name:attr_value}, name=entity_name)
+            pd.Series({entity_name:attr_value}, name=attr_name)
         """
         if isinstance(attrs, pd.DataFrame):
             attr_list = []
