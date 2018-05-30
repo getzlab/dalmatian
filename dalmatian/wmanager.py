@@ -157,7 +157,9 @@ class WorkspaceManager(object):
 
 
     def upload_entities(self, etype, df, index=True):
-        """"""
+        """
+        index: True if DataFrame index corresponds to ID
+        """
         buf = io.StringIO()
         df.to_csv(buf, sep='\t', index=index)
         s = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
@@ -357,7 +359,7 @@ class WorkspaceManager(object):
         # filter submissions by configuration
         submissions = self.list_submissions(config=config)
 
-        statuses = ['Succeeded', 'Running', 'Failed', 'Aborted', 'Submitted', 'Queued']
+        statuses = ['Succeeded', 'Running', 'Failed', 'Aborted', 'Aborting', 'Submitted', 'Queued']
         df = []
         for s in submissions:
             d = {
@@ -874,6 +876,15 @@ class WorkspaceManager(object):
         return df
 
 
+    def get_participant_sets(self):
+        """Get DataFrame with sample sets and their attributes"""
+        df = self.get_entities('participant_set')
+        # convert sample lists from JSON
+        df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
+                            if np.all(pd.notnull(x)) and isinstance(x, list) else x)
+        return df
+
+
     def get_pair_sets(self):
             """Get DataFrame with sample sets and their attributes"""
             r = firecloud.api.get_entities(self.namespace, self.workspace, 'pair_set')
@@ -1120,44 +1131,65 @@ class WorkspaceManager(object):
         return sample_set_df[sample_set_df['samples'].apply(lambda x: sample_id in x)].index.tolist()
 
 
-    def purge_outdated(self, attribute, bucket_files=None, samples_df=None, ext=None):
+    def purge_unassigned(self, attribute=None, bucket_files=None, entities_df=None, ext=None):
         """
-        Delete outdated files matching attribute (e.g., from prior/outdated runs)
+        Delete any files that don't match attributes in the data model (e.g., from prior/outdated runs)
         """
         if bucket_files is None:
             bucket_files = gs_list_bucket_files(self.get_bucket_id())
 
-        if samples_df is None:
-            samples_df = self.get_samples()
+        # exclude FireCloud logs etc
+        bucket_files = [i for i in bucket_files if not i.endswith(('exec.sh', 'stderr.log', 'stdout.log'))]
 
-        try:
-            assert attribute in samples_df.columns
-        except:
-            raise ValueError('Sample attribute "{}" does not exist'.format(attribute))
-
-        # make sure all samples have attribute set
-        assert samples_df[attribute].isnull().sum()==0
-
-        if ext is None:
-            ext = np.unique([os.path.split(i)[1].split('.',1)[1] for i in samples_df[attribute]])
-            assert len(ext)==1
-            ext = ext[0]
-
-        purge_paths = [i for i in bucket_files if i.endswith(ext) and i not in set(samples_df[attribute])]
-        if len(purge_paths)==0:
-            print('No outdated files to purge.')
+        if entities_df is None:  # fetch all entities
+            found_attrs = self.get_samples().values.flatten().tolist() \
+                        + self.get_sample_sets().values.flatten().tolist() \
+                        + self.get_participants().values.flatten().tolist()
+            # missing: get_pairs, get_pair_sets --> resolve participant vs participant_id issue first
         else:
-            bucket_id = self.get_bucket_id()
-            assert np.all([i.startswith('gs://'+bucket_id) for i in purge_paths])
+            found_attrs = entities_df.values.flatten().tolist()
 
-            while True:
-                s = input('{} outdated files found. Delete? [y/n] '.format(len(purge_paths))).lower()
-                if s=='n' or s=='y':
-                    break
+        # flatten
+        assigned = []
+        for i in found_attrs:
+            if isinstance(i, str) and i.startswith('gs://'):
+                assigned.append(i)
+            elif isinstance(i, list) and np.all([j.startswith('gs://') for j in i]):
+                assigned.extend(i)
 
-            if s=='y':
-                print('Purging {} outdated files.'.format(len(purge_paths)))
-                gs_delete(purge_paths, chunk_size=500)
+        # remove assigned from list
+        assigned_set = set([os.path.split(i)[-1] for i in assigned])
+        # a = [i for i in np.setdiff1d(bucket_files, assigned) if os.path.split(i)[-1] in assigned_set]
+        # [os.path.split(i)[-1] for i in a]
+        #
+        # try:
+        #     assert attribute in samples_df.columns
+        # except:
+        #     raise ValueError('Sample attribute "{}" does not exist'.format(attribute))
+        #
+        # # make sure all samples have attribute set
+        # assert samples_df[attribute].isnull().sum()==0
+        #
+        # if ext is None:
+        #     ext = np.unique([os.path.split(i)[1].split('.',1)[1] for i in samples_df[attribute]])
+        #     assert len(ext)==1
+        #     ext = ext[0]
+        #
+        # purge_paths = [i for i in bucket_files if i.endswith(ext) and i not in set(samples_df[attribute])]
+        # if len(purge_paths)==0:
+        #     print('No outdated files to purge.')
+        # else:
+        #     bucket_id = self.get_bucket_id()
+        #     assert np.all([i.startswith('gs://'+bucket_id) for i in purge_paths])
+        #
+        #     while True:
+        #         s = input('{} outdated files found. Delete? [y/n] '.format(len(purge_paths))).lower()
+        #         if s=='n' or s=='y':
+        #             break
+        #
+        #     if s=='y':
+        #         print('Purging {} outdated files.'.format(len(purge_paths)))
+        #         gs_delete(purge_paths, chunk_size=500)
 
 
     def update_entity_attributes(self, etype, attrs):

@@ -81,8 +81,8 @@ def gs_exists(file_list_s):
     file_list_s: pd.Series
     """
     status_s = pd.Series(False, index=file_list_s.index, name='file_exists')
-    for k,(i,p) in enumerate(zip(file_list_s.index, file_list_s)):
-        print('\rChecking {}/{} files'.format(k+1, len(file_list_s)), end='')
+    for k,(i,p) in enumerate(zip(file_list_s.index, file_list_s), 1):
+        print('\rChecking {}/{} files'.format(k, len(file_list_s)), end='')
         try:
             s = subprocess.check_output('gsutil -q stat {}'.format(p), shell=True)
             status_s[i] = True
@@ -122,8 +122,8 @@ def get_md5hashes(file_list_s, num_threads=10):
     """Parallelized get_md5hash()"""
     md5_hashes = []
     with mp.Pool(processes=num_threads) as pool:
-        for k,r in enumerate(pool.imap(get_md5hash, [i for i in file_list_s])):
-            print('\rCalculating MD5 hash for file {}/{}'.format(k+1,len(file_list_s)), end='')
+        for k,r in enumerate(pool.imap(get_md5hash, [i for i in file_list_s]), 1):
+            print('\rCalculating MD5 hash for file {}/{}'.format(k,len(file_list_s)), end='')
             md5_hashes.append(r)
     return md5_hashes
 
@@ -140,8 +140,8 @@ def get_google_metadata(job_id):
         return json.loads(s.decode())
     elif isinstance(job_id, Iterable):
         json_list = []
-        for k,j in enumerate(job_id):
-            print('\rFetching metadata ({}/{})'.format(k+1,len(job_id)), end='')
+        for k,j in enumerate(job_id, 1):
+            print('\rFetching metadata ({}/{})'.format(k,len(job_id)), end='')
             s = subprocess.check_output('gcloud alpha genomics operations describe '+j+' --format json', shell=True)
             json_list.append(json.loads(s.decode()))
         return json_list
