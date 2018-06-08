@@ -1,8 +1,7 @@
 
 ### INSTALL
 
-
-dalmation requires `matplotlib` which requires when using pyenv and virtualenv that python is enabled as a framework at install.
+dalmatian requires `matplotlib`, which requires when using pyenv and virtualenv that python is enabled as a framework at install.
 
 See 'Working with Matplotlib on OSX' in the Matplotlib FAQ for more information.
 

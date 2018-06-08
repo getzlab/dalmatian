@@ -1,7 +1,7 @@
 import os
 import re
 from setuptools import setup, find_packages
-with open("dalmatian/__about__.py") as reader:
+with open("dalmatian/__init__.py") as reader:
     __version__ = re.search(
         r'__version__ ?= ?[\'\"]([\w.]+)[\'\"]',
         reader.read()
