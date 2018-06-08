@@ -11,7 +11,7 @@ _LONG_DESCRIPTION = open(_README).read()
 
 # Setup information
 setup(
-    name = 'dalmatian',
+    name = 'firecloud-dalmatian',
     version = __version__,
     packages = find_packages(),
     description = 'A friendly companion for FISS',
