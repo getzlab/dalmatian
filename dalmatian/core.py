@@ -1,5 +1,4 @@
 # Author: Francois Aguet
-
 from __future__ import print_function
 import os, sys, json
 import subprocess
@@ -12,10 +11,7 @@ import iso8601
 import argparse
 import multiprocessing as mp
 
-from .__about__ import __version__
-
 # Collection of high-level wrapper functions for FireCloud API
-
 
 
 #------------------------------------------------------------------------------
@@ -184,9 +180,7 @@ def calculate_google_cost(jobid, jobid_lookup_df):
 # Functions for managing methods and configuration in the repository
 #------------------------------------------------------------------------------
 def list_methods(namespace=None):
-    """
-    List all methods in the repository
-    """
+    """List all methods in the repository"""
     r = firecloud.api.list_repository_methods()
     assert r.status_code==200
     r = r.json()
@@ -198,9 +192,7 @@ def list_methods(namespace=None):
 
 
 def get_method(namespace, name):
-    """
-    Get all available versions of a method from the repository
-    """
+    """Get all available versions of a method from the repository"""
     r = firecloud.api.list_repository_methods()
     assert r.status_code==200
     r = r.json()
@@ -209,17 +201,13 @@ def get_method(namespace, name):
 
 
 def get_method_version(namespace, name):
-    """
-    Get latest method version
-    """
+    """Get latest method version"""
     r = get_method(namespace, name)
     return np.max([m['snapshotId'] for m in r])
 
 
 def list_configs(namespace=None):
-    """
-    List all configurations in the repository
-    """
+    """List all configurations in the repository"""
     r = firecloud.api.list_repository_configs()
     assert r.status_code==200
     r = r.json()
@@ -231,9 +219,7 @@ def list_configs(namespace=None):
 
 
 def get_config(namespace, name):
-    """
-    Get all versions of a configuration from the repository
-    """
+    """Get all versions of a configuration from the repository"""
     r = firecloud.api.list_repository_configs()
     assert r.status_code==200
     r = r.json()
@@ -242,17 +228,22 @@ def get_config(namespace, name):
 
 
 def get_config_version(namespace, name):
-    """
-    Get latest config version
-    """
+    """Get latest config version"""
     r = get_config(namespace, name)
     return np.max([m['snapshotId'] for m in r])
 
 
+def get_config_json(namespace, name, snapshot_id=None):
+    """Get configuration JSON from repository"""
+    if snapshot_id is None:  # get latest version
+        snapshot_id = get_config_version(namespace, name)
+    r = firecloud.api.get_repository_config(namespace, name, snapshot_id)
+    assert r.status_code==200
+    return json.loads(r.json()['payload'])
+
+
 def print_methods(namespace):
-    """
-    Print all methods in a namespace
-    """
+    """Print all methods in a namespace"""
     r = firecloud.api.list_repository_methods()
     assert r.status_code==200
     r = r.json()
@@ -263,9 +254,7 @@ def print_methods(namespace):
 
 
 def print_configs(namespace):
-    """
-    Print all configurations in a namespace
-    """
+    """Print all configurations in a namespace"""
     r = firecloud.api.list_repository_configs()
     assert r.status_code==200
     r = r.json()
@@ -276,9 +265,7 @@ def print_configs(namespace):
 
 
 def get_wdl(method_namespace, method_name, snapshot_id=None):
-    """
-    Get WDL from repository
-    """
+    """Get WDL from repository"""
     if snapshot_id is None:
         snapshot_id = get_method_version(method_namespace, method_name)
 
@@ -288,9 +275,7 @@ def get_wdl(method_namespace, method_name, snapshot_id=None):
 
 
 def compare_wdls(mnamespace1, mname1, mnamespace2, mname2):
-    """
-    Compare WDLs from two methods
-    """
+    """Compare WDLs from two methods"""
     v1 = get_method_version(mnamespace1, mname1)
     v2 = get_method_version(mnamespace2, mname2)
     wdl1 = get_wdl(mnamespace1, mname1, v1)
@@ -304,9 +289,7 @@ def compare_wdls(mnamespace1, mname1, mnamespace2, mname2):
 
 
 def compare_wdl(mnamespace, mname, wdl_path):
-    """
-    Compare method WDL to file
-    """
+    """Compare method WDL to file"""
     v = get_method_version(mnamespace, mname)
     wdl1 = get_wdl(mnamespace, mname, v)
     with open(wdl_path) as f:
