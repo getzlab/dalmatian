@@ -417,6 +417,13 @@ class WorkspaceManager(object):
         return r.json()
 
 
+    def get_config(self, cnamespace, config):
+        """Get workspace configuration"""
+        r = firecloud.api.get_workspace_config(self.namespace, self.workspace, cnamespace, config)
+        assert r.status_code==200
+        return r.json()
+
+
     def print_scatter_status(self, submission_id, workflow_id=None):
         """Print status for a specific scatter job"""
         if workflow_id is None:
@@ -431,7 +438,7 @@ class WorkspaceManager(object):
                 for task_name in metadata['calls']:
                     if np.all(['shardIndex' in i for i in metadata['calls'][task_name]]):
                         print('Submission status ({}): {}'.format(task_name.split('.')[-1], metadata['status']))
-                        s = pd.Series([s['backendStatus'] for s in metadata['calls'][task_name]])
+                        s = pd.Series([s['backendStatus'] if 'backendStatus' in s else 'NA' for s in metadata['calls'][task_name]])
                         print(s.value_counts().to_string())
 
 
@@ -499,9 +506,7 @@ class WorkspaceManager(object):
         """
 
         # get list of expected outputs
-        r = firecloud.api.get_workspace_config(self.namespace, self.workspace, cnamespace, configuration)
-        assert r.status_code==200
-        r = r.json()
+        r = self.get_config(cnamespace, configuration)
         output_map = {i.split('.')[-1]:j.split('this.')[-1] for i,j in r['outputs'].items()}
         columns = list(output_map.values())
 
@@ -807,6 +812,18 @@ class WorkspaceManager(object):
             print('Successfully imported configuration "{}/{}" (SnapshotId {})'.format(cnamespace, cname, c['snapshotId']))
         else:
             print(r.text)
+
+
+    def update_config(self, cnamespace, configname, json_body):
+        """Update workspace configuration"""
+        r = firecloud.api.update_workspace_config(self.namespace, self.workspace, cnamespace, configname, json_body)
+        assert r.status_code==200
+
+
+    def copy_config(self, wm, cnamespace, config):
+        """Copy configuration from another workspace"""
+        r = wm.get_config(cnamespace, config)
+        self.update_config(cnamespace, config, r)
 
 
     #-------------------------------------------------------------------------
