@@ -1,13 +1,13 @@
 
 ## dalmatian
 
-[FISS'](https://github.com/broadinstitute/fiss) faithful companion.
+[FISS](https://github.com/broadinstitute/fiss)' faithful companion.
 
 dalmatian is a collection of high-level functions for interacting with Firecloud via Pandas dataframes.
 
 ### Install
 
-`pip3 install firecloud-dalmatian`
+`pip install firecloud-dalmatian`
 
 ### Requirements
 
