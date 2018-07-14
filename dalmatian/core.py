@@ -228,7 +228,7 @@ def get_config(namespace, name):
 
 
 def get_config_version(namespace, name):
-    """Get latest config version"""
+    """Get latest configuration version"""
     r = get_config(namespace, name)
     return np.max([m['snapshotId'] for m in r])
 
@@ -240,6 +240,69 @@ def get_config_json(namespace, name, snapshot_id=None):
     r = firecloud.api.get_repository_config(namespace, name, snapshot_id)
     assert r.status_code==200
     return json.loads(r.json()['payload'])
+
+
+def get_config_template(namespace, method, version=None):
+    """Get configuration template for method"""
+    if version is None:
+        version = get_method_version(namespace, method)
+    r = firecloud.api.get_config_template(namespace, method, version)
+    assert r.status_code==200
+    return r.json()
+
+
+def autofill_config_template(namespace, method, workflow_inputs):
+    """Fill configuration template for workflow based on dependent tasks"""
+    attr = get_config_template(namespace, method)
+
+    # get dependent configurations
+    snapshot_id = get_method_version(namespace, method)
+    wdl = get_wdl(namespace, 'rnaseq_bam_star_rsem_rnaseqc_v1-1_BETA', snapshot_id)
+    wdls = [i.split()[1].replace('"','') for i in wdl.split('\n') if i.startswith('import')]
+    assert [i.startswith('https://api.firecloud.org/ga4gh/v1/tools/') for i in wdls]
+    methods = [i.split(':')[-1].split('/')[0] for i in wdls]
+    # attempt to get configurations for all methods
+    configs = {}
+    for k,m in enumerate(methods,1):
+        print('\r  * importing configuration {}/{}'.format(k, len(methods)), end='')
+        try:
+            configs[m] = get_config_json(namespace, m+'_cfg')
+        except:
+            raise ValueError('No configuration found for {} ({} not found)'.format(m, m+'_cfg'))
+    print()
+
+    # parse out inputs/outputs
+    inputs = {}
+    for c in configs:
+        for i in configs[c]['inputs']:
+            inputs['.'.join(i.split('.')[1:])] = configs[c]['inputs'][i]
+
+    outputs = {}
+    for c in configs:
+        for i in configs[c]['outputs']:
+            outputs['.'.join(i.split('.')[1:])] = configs[c]['outputs'][i]
+
+    # populate template
+    for i in attr['inputs']:
+        k = '.'.join(i.split('.')[1:])
+        if k in inputs:
+            attr['inputs'][i] = inputs[k]
+
+    for i in attr['outputs']:
+        k = '.'.join(i.split('.')[1:])
+        if k in outputs:
+            attr['outputs'][i] = outputs[k]
+
+    # add workflow inputs
+    workflow_name = np.unique([i.split('.')[0] for i in attr['inputs']])
+    assert len(workflow_name)==1
+    workflow_name = workflow_name[0]
+    for i in workflow_inputs:
+        j = workflow_name+'.'+i
+        assert j in attr['inputs']
+        attr['inputs'][j] = workflow_inputs[i]
+
+    return attr
 
 
 def print_methods(namespace):

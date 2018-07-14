@@ -770,8 +770,13 @@ class WorkspaceManager(object):
         return workflow_status_df, task_dfs
 
 
-    def publish_config(self, from_cnamespace, from_config, to_cnamespace, to_config, public=False):
+    def publish_config(self, from_cnamespace, from_config, to_cnamespace=None, to_config=None, public=False):
         """Copy configuration to repository"""
+        if to_cnamespace is None:
+            to_cnamespace = from_cnamespace
+        if to_config is None:
+            to_config = from_config
+
         # check whether prior version exists
         r = get_config(to_cnamespace, to_config)
         old_version = None
@@ -783,8 +788,10 @@ class WorkspaceManager(object):
         # copy config to repo
         r = firecloud.api.copy_config_to_repo(self.namespace, self.workspace,
                 from_cnamespace, from_config, to_cnamespace, to_config)
-        assert r.status_code==200
-        print("Successfully copied {}/{}. New SnapshotID: {}".format(to_cnamespace, to_config, r.json()['snapshotId']))
+        if r.status_code==200:
+            print("Successfully copied {}/{}. New SnapshotID: {}".format(to_cnamespace, to_config, r.json()['snapshotId']))
+        else:
+            print(r.text)
 
         # make configuration public
         if public:
@@ -795,8 +802,10 @@ class WorkspaceManager(object):
         # delete old version
         if old_version is not None:
             r = firecloud.api.delete_repository_config(to_cnamespace, to_config, old_version)
-            assert r.status_code==200
-            print("Successfully deleted SnapshotID {}.".format(old_version))
+            if r.status_code==200:
+                print("Successfully deleted SnapshotID {}.".format(old_version))
+            else:
+                print(r.text)
 
 
     def import_config(self, cnamespace, cname):
@@ -817,7 +826,10 @@ class WorkspaceManager(object):
     def update_config(self, cnamespace, configname, json_body):
         """Update workspace configuration"""
         r = firecloud.api.update_workspace_config(self.namespace, self.workspace, cnamespace, configname, json_body)
-        assert r.status_code==200
+        if r.status_code==200:
+            print('Successfully updated configuration {}/{}'.format(cnamespace, configname))
+        else:
+            print(r.text)
 
 
     def copy_config(self, wm, cnamespace, config):
@@ -825,6 +837,14 @@ class WorkspaceManager(object):
         r = wm.get_config(cnamespace, config)
         self.update_config(cnamespace, config, r)
 
+
+    def delete_config(self, cnamespace, config):
+        """Delete workspace configuration"""
+        r = firecloud.api.delete_workspace_config(self.namespace, self.workspace, cnamespace, config)
+        if r.status==204:
+            print('Successfully deleted configuration {}/{}'.format(cnamespace, config))
+        else:
+            print(r.text)
 
     #-------------------------------------------------------------------------
     #  Methods for querying entities
@@ -1286,11 +1306,7 @@ class WorkspaceManager(object):
             else:
                 print(r.text)
         else:
-            r = firecloud.api.update_workspace_config(self.namespace, self.workspace, json_body['namespace'], json_body['name'], json_body)
-            if r.status_code==200:
-                print('Successfully updated configuration: {}'.format(json_body['name']))
-            else:
-                print(r.text)
+            self.update_config(json_body['namespace'], json_body['name'], json_body)
 
 
     def check_configuration(self, config_name):
