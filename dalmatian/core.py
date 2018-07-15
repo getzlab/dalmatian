@@ -257,7 +257,7 @@ def autofill_config_template(namespace, method, workflow_inputs):
 
     # get dependent configurations
     snapshot_id = get_method_version(namespace, method)
-    wdl = get_wdl(namespace, 'rnaseq_bam_star_rsem_rnaseqc_v1-1_BETA', snapshot_id)
+    wdl = get_wdl(namespace, method, snapshot_id)
     wdls = [i.split()[1].replace('"','') for i in wdl.split('\n') if i.startswith('import')]
     assert [i.startswith('https://api.firecloud.org/ga4gh/v1/tools/') for i in wdls]
     methods = [i.split(':')[-1].split('/')[0] for i in wdls]
