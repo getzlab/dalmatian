@@ -17,7 +17,6 @@ import multiprocessing as mp
 #------------------------------------------------------------------------------
 #  Helper functions for processing timestamps
 #------------------------------------------------------------------------------
-
 def convert_time(x):
     return datetime.timestamp(iso8601.parse_date(x))
 
@@ -35,7 +34,6 @@ def workflow_time(workflow):
 #------------------------------------------------------------------------------
 #  Wrapper functions for gsutil calls
 #------------------------------------------------------------------------------
-
 def gs_list_bucket_files(bucket_id):
     """Get list of all files stored in bucket"""
     s = subprocess.check_output('gsutil ls gs://{}/**'.format(bucket_id), shell=True)
@@ -68,6 +66,37 @@ def gs_move(file_list, dest_dir, chunk_size=500):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         cmd = 'echo -e "{}" | gsutil -m mv -I {}'.format('\n'.join(x), dest_dir)
         subprocess.check_call(cmd, shell=True)
+
+
+def _gsutil_cp_wrapper(args):
+    """gsutil cp wrapper for gs_par_upload"""
+    local_path = args[0]
+    gs_path = args[1]
+    filename = os.path.basename(gs_path)
+    print('Starting upload: '+filename, flush=True)
+    st = datetime.now()
+    subprocess.check_call('gsutil cp {} {}'.format(local_path, gs_path), shell=True)
+    et = datetime.now()
+    time_min = (et-st).total_seconds()/60
+    size_gb = os.path.getsize(local_path)/1024**3
+    print('Finished upload: {}. size: {:.2f} GB, time elapsed: {:.2f} min.'.format(filename, size_gb, time_min), flush=True)
+    # return time_min, size_gb
+
+
+def gs_par_upload(local_paths, gs_paths, num_threads=10):
+    """Parallel upload to GCP bucket"""
+    assert len(local_paths)==len(gs_paths)
+    res_list = []
+    print('Starting upload pool ({} threads)'.format(num_threads), flush=True)
+    with mp.Pool(processes=int(num_threads)) as pool:
+        for i in range(len(local_paths)):
+            res = pool.map_async(_gsutil_cp_wrapper, ((local_paths[i], gs_paths[i], ),))
+            res_list.append(res)
+        pool.close()
+        pool.join()
+    print('Finished upload.', flush=True)
+    # res = np.array([i.get()[0] for i in res_list])
+    # return res[:,0], res[:,1]
 
 
 def gs_exists(file_list_s):
