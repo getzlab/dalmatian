@@ -823,8 +823,10 @@ class WorkspaceManager(object):
             print(r.text)
 
 
-    def update_config(self, cnamespace, configname, json_body):
+    def update_config(self, json_body):
         """Update workspace configuration"""
+        cnamespace = json_body['namespace']
+        configname = json_body['name']
         r = firecloud.api.update_workspace_config(self.namespace, self.workspace, cnamespace, configname, json_body)
         if r.status_code==200:
             print('Successfully updated configuration {}/{}'.format(cnamespace, configname))
