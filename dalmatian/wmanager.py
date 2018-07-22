@@ -836,8 +836,8 @@ class WorkspaceManager(object):
 
     def copy_config(self, wm, cnamespace, config):
         """Copy configuration from another workspace"""
-        r = wm.get_config(cnamespace, config)
-        self.update_config(cnamespace, config, r)
+        json_body = wm.get_config(cnamespace, config)
+        self.update_config(json_body)
 
 
     def delete_config(self, cnamespace, config):
@@ -1308,7 +1308,7 @@ class WorkspaceManager(object):
             else:
                 print(r.text)
         else:
-            self.update_config(json_body['namespace'], json_body['name'], json_body)
+            self.update_config(json_body)
 
 
     def check_configuration(self, config_name):
