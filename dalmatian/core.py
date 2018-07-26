@@ -34,9 +34,12 @@ def workflow_time(workflow):
 #------------------------------------------------------------------------------
 #  Wrapper functions for gsutil calls
 #------------------------------------------------------------------------------
-def gs_list_bucket_files(bucket_id):
+def gs_list_bucket_files(bucket_id, path=None):
     """Get list of all files stored in bucket"""
-    s = subprocess.check_output('gsutil ls gs://{}/**'.format(bucket_id), shell=True)
+    if path is None:
+        s = subprocess.check_output('gsutil ls gs://{}/**'.format(bucket_id), shell=True)
+    else:
+        s = subprocess.check_output(os.path.join('gsutil ls gs://{}'.format(bucket_id), path, '**'), shell=True)
     return s.decode().strip().split('\n')
 
 
