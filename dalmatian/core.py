@@ -34,13 +34,16 @@ def workflow_time(workflow):
 #------------------------------------------------------------------------------
 #  Wrapper functions for gsutil calls
 #------------------------------------------------------------------------------
-def gs_list_bucket_files(bucket_id, path=None):
+def gs_list_bucket_files(bucket_id, path=None, ext=None):
     """Get list of all files stored in bucket"""
     if path is None:
         s = subprocess.check_output('gsutil ls gs://{}/**'.format(bucket_id), shell=True)
     else:
         s = subprocess.check_output(os.path.join('gsutil ls gs://{}'.format(bucket_id), path, '**'), shell=True)
-    return s.decode().strip().split('\n')
+    s = s.decode().strip().split('\n')
+    if ext is not None:
+        s = [i for i in s if i.endswith(ext)]
+    return s
 
 
 def gs_delete(file_list, chunk_size=500):
@@ -211,6 +214,15 @@ def calculate_google_cost(jobid, jobid_lookup_df):
 #------------------------------------------------------------------------------
 # Functions for managing methods and configuration in the repository
 #------------------------------------------------------------------------------
+def list_workspaces():
+    """List all workspaces"""
+    r = firecloud.api.list_workspaces()
+    if r.status_code==200:
+        return r.json()
+    else:
+        print(r.text)
+
+
 def list_methods(namespace=None):
     """List all methods in the repository"""
     r = firecloud.api.list_repository_methods()
