@@ -1119,9 +1119,41 @@ class WorkspaceManager(object):
             print(r.text)
 
 
-    def delete_sample(self, sample_ids):
+    def delete_sample(self, sample_ids, delete_dependencies=True):
         """Delete sample or list of samples"""
-        self.delete_entity('sample', sample_ids)
+        if isinstance(sample_ids, str):
+            sample_id_set = set([sample_ids])
+        else:
+            sample_id_set = set(sample_ids)
+        etype = 'sample'
+        r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'sample', sample_ids)
+        if r.status_code==204:
+            print('Sample(s) {} successfully deleted.'.format(sample_ids))
+        elif r.status_code==409:
+            if delete_dependencies:
+                participant_df = self.get_participants()
+                if not 'samples_' in participant_df.columns:
+                    raise ValueError('')
+                participant_df = participant_df[participant_df['samples_'].apply(lambda x: np.any([i in sample_id_set for i in x]))]
+                entitites_dict = participant_df['samples_'].apply(lambda x: np.array([i for i in x if i not in sample_id_set])).to_dict()
+                participant_ids = np.unique(participant_df.index)
+
+                for n,k in enumerate(participant_ids, 1):
+                    print('\r  * removing {}s for participant {}/{}'.format(etype, n, len(participant_ids)), end='')
+                    attr_dict = {
+                        "{}s_".format(etype): {
+                            "itemsType": "EntityReference",
+                            "items": [{"entityType": etype, "entityName": i} for i in entitites_dict[k]]
+                        }
+                    }
+                    attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+                    r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
+                    assert r.status_code==200
+            else:
+                print('The following entities must be deleted before the samples(s) can be deleted:')
+                print(r.text)
+        else:
+            print(r.text)
 
 
     def delete_sample_set(self, sample_set_id):
