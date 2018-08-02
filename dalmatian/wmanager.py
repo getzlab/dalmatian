@@ -843,7 +843,7 @@ class WorkspaceManager(object):
     def delete_config(self, cnamespace, config):
         """Delete workspace configuration"""
         r = firecloud.api.delete_workspace_config(self.namespace, self.workspace, cnamespace, config)
-        if r.status==204:
+        if r.status_code==204:
             print('Successfully deleted configuration {}/{}'.format(cnamespace, config))
         else:
             print(r.text)
@@ -1129,28 +1129,39 @@ class WorkspaceManager(object):
         r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'sample', sample_ids)
         if r.status_code==204:
             print('Sample(s) {} successfully deleted.'.format(sample_ids))
-        elif r.status_code==409:
-            if delete_dependencies:
-                participant_df = self.get_participants()
-                if not 'samples_' in participant_df.columns:
-                    raise ValueError('')
-                participant_df = participant_df[participant_df['samples_'].apply(lambda x: np.any([i in sample_id_set for i in x]))]
-                entitites_dict = participant_df['samples_'].apply(lambda x: np.array([i for i in x if i not in sample_id_set])).to_dict()
-                participant_ids = np.unique(participant_df.index)
 
-                for n,k in enumerate(participant_ids, 1):
-                    print('\r  * removing {}s for participant {}/{}'.format(etype, n, len(participant_ids)), end='')
-                    attr_dict = {
-                        "{}s_".format(etype): {
-                            "itemsType": "EntityReference",
-                            "items": [{"entityType": etype, "entityName": i} for i in entitites_dict[k]]
-                        }
+        elif r.status_code==409 and delete_dependencies:
+            # delete participant dependencies
+            participant_df = self.get_participants()
+            if not 'samples_' in participant_df.columns:
+                raise ValueError('')
+            participant_df = participant_df[participant_df['samples_'].apply(lambda x: np.any([i in sample_id_set for i in x]))]
+            entitites_dict = participant_df['samples_'].apply(lambda x: np.array([i for i in x if i not in sample_id_set])).to_dict()
+            participant_ids = np.unique(participant_df.index)
+            for n,k in enumerate(participant_ids, 1):
+                print('\r  * removing {}s for participant {}/{}'.format(etype, n, len(participant_ids)), end='')
+                attr_dict = {
+                    "{}s_".format(etype): {
+                        "itemsType": "EntityReference",
+                        "items": [{"entityType": etype, "entityName": i} for i in entitites_dict[k]]
                     }
-                    attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-                    r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
-                    assert r.status_code==200
+                }
+                attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+                r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
+                assert r.status_code==200
+            print()
+
+            # delete sample set dependencies
+            set_df = self.get_sample_sets()
+            for i,s in set_df['samples'].items():
+                if np.any([i in sample_id_set for i in s]):
+                    self.update_sample_set(i, np.setdiff1d(s, list(sample_id_set)))
+
+            # try again
+            r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'sample', sample_ids)
+            if r.status_code==204:
+                print('Sample(s) {} successfully deleted.'.format(sample_ids))
             else:
-                print('The following entities must be deleted before the samples(s) can be deleted:')
                 print(r.text)
         else:
             print(r.text)

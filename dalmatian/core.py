@@ -375,6 +375,7 @@ def get_wdl(method_namespace, method_name, snapshot_id=None):
     """Get WDL from repository"""
     if snapshot_id is None:
         snapshot_id = get_method_version(method_namespace, method_name)
+        print('Using latest snapshot: {}'.format(snapshot_id))
 
     r = firecloud.api.get_repository_method(method_namespace, method_name, snapshot_id)
     assert r.status_code==200
