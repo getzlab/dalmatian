@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import firecloud.api
 import iso8601
+import binascii, base64
 import argparse
 import multiprocessing as mp
 
@@ -136,6 +137,23 @@ def gs_size(file_list_s):
         index=[i.split()[-1] for i in gs_sizes])
     gs_sizes.index.name = 'path'
     return pd.Series(gs_sizes[file_list_s].values, index=file_list_s.index, name='size_bytes')
+
+
+def _parse_stat_entry(se):
+    """parse output from 'gsutil stat'"""
+    se = se.split('\n')
+    filename = se[0].strip(':')
+    md5 = [i for i in se if 'md5' in i][0].split()[-1]
+    md5 = binascii.hexlify(base64.b64decode(md5)).decode()
+    sample_id = os.path.basename(filename).split('.')[0]
+    return sample_id, md5
+
+
+def get_md5_hashes(wildcard_path):
+    s = subprocess.check_output('gsutil stat '+wildcard_path, shell=True).decode().strip()
+    s = ['gs://'+i for i in s.split('gs://')[1:]]
+    sample_ids, md5 = np.array([_parse_stat_entry(i) for i in s]).T
+    return pd.Series(md5, index=sample_ids, name='md5').sort_index()
 
 
 def get_md5hash(file_path):
