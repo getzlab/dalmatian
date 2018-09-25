@@ -24,6 +24,7 @@ import dalmatian
 wm = dalmatian.WorkspaceManager(namespace, workspace)
 ```
 
+#### Creating and managing workspaces
 Create the workspace:
 ```
 wm.create_workspace()
@@ -59,6 +60,20 @@ wm.update_sample_set('all_samples', samples_df.index)
 wm.update_participant_set('all_participants', participant_df.index)
 ```
 
+Copy/move data from workspace:
+```
+samples_df = wm.get_samples()
+dalmatian.gs_copy(samples_df[attibute_name], dest_path)
+dalmatian.gs_move(samples_df[attibute_name], dest_path)
+```
+
+Clone a workspace:
+```
+wm2 = dalmatian.WorkspaceManager(namespace2, workspace2)
+wm2.create_workspace(wm)
+```
+
+#### Running jobs
 Submit jobs:
 ```
 wm.create_submission(config_namespace, config_name, sample_id, 'sample', use_callcache=True)
@@ -77,19 +92,13 @@ status_df = wm.get_sample_status(config_name)
 workflow_status_df, task_dfs = wm.get_stats(status_df)
 ```
 
-Copy/move data from workspace:
+Re-run failed jobs (for a sample set):
 ```
-samples_df = wm.get_samples()
-dalmatian.gs_copy(samples_df[attibute_name], dest_path)
-dalmatian.gs_move(samples_df[attibute_name], dest_path)
+status_df = wm.get_sample_set_status(config_name)
+print(status_df['status'].value_counts)  # list sample statuses
+wm.update_sample_set('reruns', status_df[status_df['status']=='Failed'].index)
+wm.create_submission(config_namespace, config_name, sample_set_id, 'reruns', expression=this.samples, use_callcache=True)
 ```
-
-Clone a workspace:
-```
-wm2 = dalmatian.WorkspaceManager(namespace2, workspace2)
-wm2.create_workspace(wm)
-```
-
 
 ### Contents
 
