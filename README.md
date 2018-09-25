@@ -95,7 +95,7 @@ workflow_status_df, task_dfs = wm.get_stats(status_df)
 Re-run failed jobs (for a sample set):
 ```
 status_df = wm.get_sample_set_status(config_name)
-print(status_df['status'].value_counts)  # list sample statuses
+print(status_df['status'].value_counts())  # list sample statuses
 wm.update_sample_set('reruns', status_df[status_df['status']=='Failed'].index)
 wm.create_submission(config_namespace, config_name, sample_set_id, 'reruns', expression=this.samples, use_callcache=True)
 ```
