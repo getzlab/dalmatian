@@ -410,20 +410,6 @@ class WorkspaceManager(object):
         return submissions
 
 
-    def list_configs(self):
-        """List configurations in workspace"""
-        r = firecloud.api.list_workspace_configs(self.namespace, self.workspace)
-        assert r.status_code==200
-        return r.json()
-
-
-    def get_config(self, cnamespace, config):
-        """Get workspace configuration"""
-        r = firecloud.api.get_workspace_config(self.namespace, self.workspace, cnamespace, config)
-        assert r.status_code==200
-        return r.json()
-
-
     def print_scatter_status(self, submission_id, workflow_id=None):
         """Print status for a specific scatter job"""
         if workflow_id is None:
@@ -769,6 +755,89 @@ class WorkspaceManager(object):
 
         return workflow_status_df, task_dfs
 
+    #-------------------------------------------------------------------------
+    #  Methods for manipulating configurations
+    #-------------------------------------------------------------------------
+    def list_configs(self):
+        """List configurations in workspace"""
+        r = firecloud.api.list_workspace_configs(self.namespace, self.workspace)
+        assert r.status_code==200
+        return r.json()
+
+
+    def get_config(self, cnamespace, config):
+        """Get workspace configuration JSON"""
+        r = firecloud.api.get_workspace_config(self.namespace, self.workspace, cnamespace, config)
+        assert r.status_code==200
+        return r.json()
+
+
+    def get_configs(self, latest_only=False):
+        """Get all configurations in the workspace"""
+        r = self.list_configs()
+        df = pd.io.json.json_normalize(r)
+        df.rename(columns={c:c.split('methodRepoMethod.')[-1] for c in df.columns}, inplace=True)
+        if latest_only:
+            df = df.sort_values(['methodName','methodVersion'], ascending=False).groupby('methodName').head(1)
+            # .sort_values('methodName')
+            # reverse sort
+            return df[::-1]
+        return df
+
+
+    def import_config(self, cnamespace, cname):
+        """Import configuration from repository"""
+        # get latest snapshot
+        c = get_config(cnamespace, cname)
+        if len(c)==0:
+            raise ValueError('Configuration "{}/{}" not found (name must match exactly).'.format(cnamespace, cname))
+        c = c[np.argmax([i['snapshotId'] for i in c])]
+        r = firecloud.api.copy_config_from_repo(self.namespace, self.workspace,
+            cnamespace, cname, c['snapshotId'], cnamespace, cname)
+        if r.status_code==201:
+            print('Successfully imported configuration "{}/{}" (SnapshotId {})'.format(cnamespace, cname, c['snapshotId']))
+        else:
+            print(r.text)
+
+
+    def update_config(self, json_body):
+        """
+        Create or update a method configuration (separate API calls)
+
+        json_body = {
+           'namespace': config_namespace,
+           'name': config_name,
+           'rootEntityType' : entity,
+           'methodRepoMethod': {'methodName':method_name, 'methodNamespace':method_namespace, 'methodVersion':version},
+           'methodNamespace': method_namespace,
+           'inputs':  {},
+           'outputs': {},
+           'prerequisites': {},
+           'deleted': False
+        }
+
+        """
+        configs = self.list_configs()
+        if json_body['name'] not in [m['name'] for m in configs]:
+            # configuration doesn't exist -> name, namespace specified in json_body
+            r = firecloud.api.create_workspace_config(self.namespace, self.workspace, json_body)
+            if r.status_code==201:
+                print('Successfully added configuration: {}'.format(json_body['name']))
+            else:
+                print(r.text)
+        else:
+            r = firecloud.api.update_workspace_config(self.namespace, self.workspace,
+                    json_body['namespace'], json_body['name'], json_body)
+            if r.status_code==200:
+                print('Successfully updated configuration {}/{}'.format(json_body['namespace'], json_body['name']))
+            else:
+                print(r.text)
+
+
+    def copy_config(self, wm, cnamespace, config):
+        """Copy configuration from another workspace"""
+        self.update_config(wm.get_config(cnamespace, config))
+
 
     def publish_config(self, from_cnamespace, from_config, to_cnamespace=None, to_config=None, public=False):
         """Copy configuration to repository"""
@@ -808,36 +877,16 @@ class WorkspaceManager(object):
                 print(r.text)
 
 
-    def import_config(self, cnamespace, cname):
-        """Import configuration from repository"""
-        # get latest snapshot
-        c = get_config(cnamespace, cname)
-        if len(c)==0:
-            raise ValueError('Configuration "{}/{}" not found (name must match exactly).'.format(cnamespace, cname))
-        c = c[np.argmax([i['snapshotId'] for i in c])]
-        r = firecloud.api.copy_config_from_repo(self.namespace, self.workspace,
-            cnamespace, cname, c['snapshotId'], cnamespace, cname)
-        if r.status_code==201:
-            print('Successfully imported configuration "{}/{}" (SnapshotId {})'.format(cnamespace, cname, c['snapshotId']))
-        else:
-            print(r.text)
-
-
-    def update_config(self, json_body):
-        """Update workspace configuration"""
-        cnamespace = json_body['namespace']
-        configname = json_body['name']
-        r = firecloud.api.update_workspace_config(self.namespace, self.workspace, cnamespace, configname, json_body)
-        if r.status_code==200:
-            print('Successfully updated configuration {}/{}'.format(cnamespace, configname))
-        else:
-            print(r.text)
-
-
-    def copy_config(self, wm, cnamespace, config):
-        """Copy configuration from another workspace"""
-        json_body = wm.get_config(cnamespace, config)
-        self.update_config(json_body)
+    def check_config(self, config_name):
+        """
+        Get version of a configuration and compare to latest available in repository
+        """
+        r = self.list_configs()
+        r = [i for i in r if i['name']==config_name][0]['methodRepoMethod']
+        # method repo version
+        mrversion = get_method_version(r['methodNamespace'], r['methodName'])
+        print('Method for config. {}: {} version {} (latest: {})'.format(config_name, r['methodName'], r['methodVersion'], mrversion))
+        return r['methodVersion']
 
 
     def delete_config(self, cnamespace, config):
@@ -1323,62 +1372,6 @@ class WorkspaceManager(object):
         #         print('Successfully updated {}.'.format(ename))
         #     else:
         #         print(r.text)
-
-
-    def update_configuration(self, json_body):
-        """
-        Create or update a method configuration (separate API calls)
-
-        json_body = {
-           'namespace': config_namespace,
-           'name': config_name,
-           'rootEntityType' : entity,
-           'methodRepoMethod': {'methodName':method_name, 'methodNamespace':method_namespace, 'methodVersion':version},
-           'methodNamespace': method_namespace,
-           'inputs':  {},
-           'outputs': {},
-           'prerequisites': {},
-           'deleted': False
-        }
-
-        """
-        configs = self.list_configs()
-        if json_body['name'] not in [m['name'] for m in configs]:
-            # configuration doesn't exist -> name, namespace specified in json_body
-            r = firecloud.api.create_workspace_config(self.namespace, self.workspace, json_body)
-            if r.status_code==201:
-                print('Successfully added configuration: {}'.format(json_body['name']))
-            else:
-                print(r.text)
-        else:
-            self.update_config(json_body)
-
-
-    def check_configuration(self, config_name):
-        """
-        Get version of a configuration and compare to latest available in repository
-        """
-        r = self.list_configs()
-        r = [i for i in r if i['name']==config_name][0]['methodRepoMethod']
-        # method repo version
-        mrversion = get_method_version(r['methodNamespace'], r['methodName'])
-        print('Method for config. {}: {} version {} (latest: {})'.format(config_name, r['methodName'], r['methodVersion'], mrversion))
-        return r['methodVersion']
-
-
-    def get_configs(self, latest_only=False):
-        """
-        Get all configurations in the workspace
-        """
-        r = self.list_configs()
-        df = pd.io.json.json_normalize(r)
-        df.rename(columns={c:c.split('methodRepoMethod.')[-1] for c in df.columns}, inplace=True)
-        if latest_only:
-            df = df.sort_values(['methodName','methodVersion'], ascending=False).groupby('methodName').head(1)
-            # .sort_values('methodName')
-            # reverse sort
-            return df[::-1]
-        return df
 
 
     def create_submission(self, cnamespace, config, entity, etype, expression=None, use_callcache=True):
