@@ -1182,23 +1182,22 @@ class WorkspaceManager(object):
         elif r.status_code==409 and delete_dependencies:
             # delete participant dependencies
             participant_df = self.get_participants()
-            if not 'samples_' in participant_df.columns:
-                raise ValueError('')
-            participant_df = participant_df[participant_df['samples_'].apply(lambda x: np.any([i in sample_id_set for i in x]))]
-            entitites_dict = participant_df['samples_'].apply(lambda x: np.array([i for i in x if i not in sample_id_set])).to_dict()
-            participant_ids = np.unique(participant_df.index)
-            for n,k in enumerate(participant_ids, 1):
-                print('\r  * removing {}s for participant {}/{}'.format(etype, n, len(participant_ids)), end='')
-                attr_dict = {
-                    "{}s_".format(etype): {
-                        "itemsType": "EntityReference",
-                        "items": [{"entityType": etype, "entityName": i} for i in entitites_dict[k]]
+            if 'samples_' in participant_df.columns:
+                participant_df = participant_df[participant_df['samples_'].apply(lambda x: np.any([i in sample_id_set for i in x]))]
+                entitites_dict = participant_df['samples_'].apply(lambda x: np.array([i for i in x if i not in sample_id_set])).to_dict()
+                participant_ids = np.unique(participant_df.index)
+                for n,k in enumerate(participant_ids, 1):
+                    print('\r  * removing {}s for participant {}/{}'.format(etype, n, len(participant_ids)), end='')
+                    attr_dict = {
+                        "{}s_".format(etype): {
+                            "itemsType": "EntityReference",
+                            "items": [{"entityType": etype, "entityName": i} for i in entitites_dict[k]]
+                        }
                     }
-                }
-                attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-                r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
-                assert r.status_code==200
-            print()
+                    attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+                    r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
+                    assert r.status_code==200
+                print()
 
             # delete sample set dependencies
             set_df = self.get_sample_sets()
