@@ -975,24 +975,26 @@ class WorkspaceManager(object):
 
     def get_pair_sets(self):
         """Get DataFrame with sample sets and their attributes"""
-        r = self.get_entities('pair_set')
+        df = self.get_entities('pair_set')
+        df['pairs'] = df['pairs'].apply(lambda x: [i['entityName'] for i in x])
 
-        # convert JSON to table
-        pair_set_ids = [i['name'] for i in r]
-        columns = np.unique([k for s in r for k in s['attributes'].keys()])
-        df = pd.DataFrame(index=pair_set_ids, columns=columns)
-        for s in r:
-            for c in columns:
-                if c in s['attributes']:
-                    if isinstance(s['attributes'][c], dict):
-                        df.loc[s['name'], c] = [i['entityName'] if 'entityName' in i else i for i in
-                                                s['attributes'][c]['items']]
-                    else:
-                        df.loc[s['name'], c] = s['attributes'][c]
+        # # convert JSON to table
+        # columns = np.unique([k for s in df for k in s['attributes'].keys()])
+        # df = pd.DataFrame(index=df.index, columns=columns)
+        # for s in df:
+        #     for c in columns:
+        #         if c in s['attributes']:
+        #             if isinstance(s['attributes'][c], dict):
+        #                 df.loc[s['name'], c] = [i['entityName'] if 'entityName' in i else i for i in
+        #                                         s['attributes'][c]['items']]
+        #             else:
+        #                 df.loc[s['name'], c] = s['attributes'][c]
         return df
 
 
     def get_pairs_in_pair_set(self, pair_set):
+        """Get DataFrame with pairs belonging to pair_set"""
+        # return df[df.index.isin(self.get_pair_sets().loc[pair_set, 'pairs'])]
         df = self.get_pairs()
         df = df[
             ~np.isnan(is_member(df.index.values, self.get_pair_sets().loc[pair_set]['pairs']))]
