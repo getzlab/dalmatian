@@ -195,13 +195,17 @@ class WorkspaceManager(object):
         Upload samples stored in a pandas DataFrame, and populate the required
         participant, sample, and sample_set attributes
 
-        df columns: sample_id (index), participant_id, {sample_set_id,} other attributes
+        df columns: sample_id (index), participant[_id], {sample_set_id,}, additional attributes
         """
-        assert df.index.name=='sample_id' and df.columns[0]=='participant_id'
+        assert df.index.name=='sample_id' and ('participant' in df.columns or 'participant_id' in df.columns)
+        if 'participant' in df.columns:
+            participant_col = 'participant'
+        else:
+            participant_col = 'participant_id'
 
         # 1) upload participant IDs (without additional attributes)
         if participant_df is None:
-            self.upload_participants(np.unique(df['participant_id']))
+            self.upload_participants(np.unique(df[participant_col]))
         else:
             assert (participant_df.index.name=='entity:participant_id'
                 or participant_df.columns[0]=='entity:participant_id')
