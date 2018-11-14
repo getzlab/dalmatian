@@ -361,7 +361,7 @@ class WorkspaceManager(object):
 						try:
 							if v['itemsType']=='EntityReference':
 								for idx,item in enumerate(v['items']):
-									if item['entityName']==ename:
+									if item['entityType']==etype and item['entityName']==ename:
 										entity['attributes'][k]['items'][idx]['entityName'] = ename_new
 										updated = True
 						except:
