@@ -325,55 +325,58 @@ class WorkspaceManager(object):
         self.delete_entity_attributes(self, 'sample_set', sample_set_id, attrs)
 
 
-	def rename_entity(self, etype, ename, ename_new, dependencies=['participant','sample','pair','participant_set','sample_set','pair_set']):
-		"""
-		Rename an entity
-		dependencies are entity types with an attribute(s) that refers to the entity being renamed
-		"""
-		assert etype in ['participant','sample','pair','participant_set','sample_set','pair_set'],'Invalid entity type'
-		mandatory_attrs = {'participant':[],
-						   'sample':['participant'],
-						   'pair':['case_sample','control_sample','participant'],
-						   'participant_set':[],
-						   'sample_set':[],
-						   'pair_set':[]}
-		entity = firecloud.api.get_entity(self.namespace,self.workspace,etype,ename)
-		assert entity.status_code==200,'Unable to retrieve entity'
-		attrs = entity.json()['attributes']
-		header_str = 'entity:'+etype+'_id\t'+'\t'.join(mandatory_attrs[etype])
-		attr_str = ename_new+'\t'+'\t'.join([attrs[x]['entityName'] for x in mandatory_attrs[etype]])
-		s = firecloud.api.upload_entities(self.namespace,self.workspace,'\n'.join([header_str,attr_str]))
-		assert s.status_code==200,'Failed to rename entity'
-		for attr in mandatory_attrs[etype]:
-			del attrs[attr]
-		attr_list = [firecloud.api._attr_set(k,v) for k,v in attrs.items()]
-		firecloud.api.update_entity(self.namespace,self.workspace,etype,ename_new,attr_list)
-		for dependency in dependencies:
-			r = firecloud.api.get_entities_query(self.namespace,self.workspace,dependency)
-			if r.status_code!=200:
-				firecloud.api.delete_entity_type(self.namespace,self.workspace,etype,ename_new)
-				raise RuntimeError('Failed to rename entity')
-			else:
-				entity_dict = r.json()
-				for entity in entity_dict['results']:
-					updated = False
-					for k,v in entity['attributes'].items():
-						try:
-							if v['itemsType']=='EntityReference':
-								for idx,item in enumerate(v['items']):
-									if item['entityType']==etype and item['entityName']==ename:
-										entity['attributes'][k]['items'][idx]['entityName'] = ename_new
-										updated = True
-						except:
-							pass
-					if updated:
-						attr_list = [firecloud.api._attr_set(k,v) for k,v in entity['attributes'].items()]
-						t = firecloud.api.update_entity(self.namespace,self.workspace,dependency,entity['name'],attr_list)
-						assert t.status_code==200,'Failed to rename entity, critical'
-		y = firecloud.api.delete_entity_type(self.namespace,self.workspace,etype,ename)
-		if y.status_code==409:
-			print('Warning: could not completely rename entity; check for dangling entities')
-            # Can be fixed by running the method again with default dependencies
+    def rename_entity(self, etype, ename, ename_new, dependencies=['participant','sample','pair','participant_set','sample_set','pair_set'], overwrite=False):
+        """
+        Rename an entity
+        dependencies are entity types with an attribute(s) that refers to the entity being renamed
+        """
+        assert etype in ['participant','sample','pair','participant_set','sample_set','pair_set'],'Invalid entity type'
+        if not overwrite:
+            assert ename_new not in wm.get_entities(etype).index
+        mandatory_attrs = {'participant':[],
+                           'sample':['participant'],
+                           'pair':['case_sample','control_sample','participant'],
+                           'participant_set':[],
+                           'sample_set':[],
+                           'pair_set':[]}
+        entity = firecloud.api.get_entity(self.namespace,self.workspace,etype,ename)
+        assert entity.status_code==200,'Unable to retrieve entity'
+        attrs = entity.json()['attributes']
+        header_str = 'entity:'+etype+'_id\t'+'\t'.join(mandatory_attrs[etype])
+        attr_str = ename_new+'\t'+'\t'.join([attrs[x]['entityName'] for x in mandatory_attrs[etype]])
+        s = firecloud.api.upload_entities(self.namespace,self.workspace,'\n'.join([header_str,attr_str]))
+        assert s.status_code==200,'Failed to rename entity'
+        for attr in mandatory_attrs[etype]:
+            del attrs[attr]
+        attr_list = [firecloud.api._attr_set(k,v) for k,v in attrs.items()]
+        firecloud.api.update_entity(self.namespace,self.workspace,etype,ename_new,attr_list)
+        for dependency in dependencies:
+            r = firecloud.api.get_entities_query(self.namespace,self.workspace,dependency)
+            if r.status_code!=200:
+                firecloud.api.delete_entity_type(self.namespace,self.workspace,etype,ename_new)
+                raise RuntimeError('Failed to rename entity')
+            else:
+                entity_dict = r.json()
+                for entity in entity_dict['results']:
+                    updated = False
+                    for k,v in entity['attributes'].items():
+                        try:
+                            if v['itemsType']=='EntityReference':
+                                for idx,item in enumerate(v['items']):
+                                    if item['entityType']==etype and item['entityName']==ename:
+                                        entity['attributes'][k]['items'][idx]['entityName'] = ename_new
+                                        updated = True
+                        except:
+                            pass
+                    if updated:
+                        attr_list = [firecloud.api._attr_set(k,v) for k,v in entity['attributes'].items()]
+                        t = firecloud.api.update_entity(self.namespace,self.workspace,dependency,entity['name'],attr_list)
+                        assert t.status_code==200,'Failed to rename entity, critical: please report'
+        y = firecloud.api.delete_entity_type(self.namespace,self.workspace,etype,ename)
+        if y.status_code==409:
+            print('Warning: could not completely rename entity; check for dangling attributes')
+        else:
+            print('Successfully renamed entity')
 
 
     def update_attributes(self, attr_dict):
