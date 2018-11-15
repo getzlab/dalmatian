@@ -332,7 +332,7 @@ class WorkspaceManager(object):
         """
         assert etype in ['participant','sample','pair','participant_set','sample_set','pair_set'],'Invalid entity type'
         if not overwrite:
-            assert ename_new not in wm.get_entities(etype).index
+            assert ename_new not in self.get_entities(etype).index
         mandatory_attrs = {'participant':[],
                            'sample':['participant'],
                            'pair':['case_sample','control_sample','participant'],
