@@ -1099,7 +1099,7 @@ class WorkspaceManager(object):
 
         if delete_files:
             assert isinstance(attrs, (pd.DataFrame, pd.Series))
-            file_list = attrs.values.flatten()
+            file_list = [x for x in attrs.values.flatten() if type(x) is str and x.startswith('gs://')]
             if dry_run:
                 print('[dry-run] the following files will be deleted:')
                 print('\n'.join(file_list))
