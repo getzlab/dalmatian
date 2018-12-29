@@ -77,27 +77,27 @@ def gs_move(file_list, dest_dir, chunk_size=500):
 
 def _gsutil_cp_wrapper(args):
     """gsutil cp wrapper for gs_par_upload"""
-    local_path = args[0]
-    gs_path = args[1]
-    filename = os.path.basename(gs_path)
-    print('Starting upload: '+filename, flush=True)
+    source_path = args[0]
+    dest_path = args[1]
+    filename = os.path.basename(dest_path)
+    print('Starting copy: '+filename, flush=True)
     st = datetime.now()
-    subprocess.check_call('gsutil cp {} {}'.format(local_path, gs_path), shell=True)
+    subprocess.check_call('gsutil cp {} {}'.format(source_path, dest_path), shell=True)
     et = datetime.now()
     time_min = (et-st).total_seconds()/60
-    size_gb = os.path.getsize(local_path)/1024**3
-    print('Finished upload: {}. size: {:.2f} GB, time elapsed: {:.2f} min.'.format(filename, size_gb, time_min), flush=True)
+    size_gb = os.path.getsize(source_path)/1024**3
+    print('Finished copy: {}. size: {:.2f} GB, time elapsed: {:.2f} min.'.format(filename, size_gb, time_min), flush=True)
     # return time_min, size_gb
 
 
-def gs_par_upload(local_paths, gs_paths, num_threads=10):
-    """Parallel upload to GCP bucket"""
-    assert len(local_paths)==len(gs_paths)
+def gs_copy_par(source_paths, dest_paths, num_threads=10):
+    """Parallel gsutil cp"""
+    assert len(source_paths)==len(dest_paths)
     res_list = []
-    print('Starting upload pool ({} threads)'.format(num_threads), flush=True)
+    print('Starting cp pool ({} threads)'.format(num_threads), flush=True)
     with mp.Pool(processes=int(num_threads)) as pool:
-        for i in range(len(local_paths)):
-            res = pool.map_async(_gsutil_cp_wrapper, ((local_paths[i], gs_paths[i], ),))
+        for i in range(len(source_paths)):
+            res = pool.map_async(_gsutil_cp_wrapper, ((source_paths[i], dest_paths[i], ),))
             res_list.append(res)
         pool.close()
         pool.join()
