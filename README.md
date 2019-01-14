@@ -37,7 +37,7 @@ Upload samples and sample attributes (e.g., BAM paths). The attributes must be p
 ```
 wm.upload_samples(attributes_df, add_participant_samples=True)
 ```
-If `add_participant_samples=True`, all samples of a participant are stored in `participant.samples_`. 
+If `add_participant_samples=True`, all samples of a participant are stored in `participant.samples_`.
 
 Add or update workspace attributes:
 ```
@@ -63,8 +63,8 @@ wm.update_participant_set('all_participants', participant_df.index)
 Copy/move data from workspace:
 ```
 samples_df = wm.get_samples()
-dalmatian.gs_copy(samples_df[attibute_name], dest_path)
-dalmatian.gs_move(samples_df[attibute_name], dest_path)
+dalmatian.gs_copy(samples_df[attribute_name], dest_path)
+dalmatian.gs_move(samples_df[attribute_name], dest_path)
 ```
 
 Clone a workspace:
@@ -77,8 +77,8 @@ wm2.create_workspace(wm)
 Submit jobs:
 ```
 wm.create_submission(config_namespace, config_name, sample_id, 'sample', use_callcache=True)
-wm.create_submission(config_namespace, config_name, sample_set_id, 'sample_set', expression=this.samples, use_callcache=True)
-wm.create_submission(config_namespace, config_name, participant_id, 'participant', expression=this.samples_, use_callcache=True)
+wm.create_submission(config_namespace, config_name, sample_set_id, 'sample_set', expression='this.samples', use_callcache=True)
+wm.create_submission(config_namespace, config_name, participant_id, 'participant', expression='this.samples_', use_callcache=True)
 ```
 
 Monitor jobs:
