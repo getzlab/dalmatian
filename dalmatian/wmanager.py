@@ -1347,14 +1347,14 @@ class WorkspaceManager(object):
                 attr_list.extend([{
                     'name':row.name,
                     'entityType':etype,
-                    'operations': [{"op": "AddUpdateAttribute", "attributeName": i, "addUpdateAttribute":str(j)} for i,j in row.iteritems()]
+                    'operations': [{"op": "AddUpdateAttribute", "attributeName": i, "addUpdateAttribute":str(j)} for i,j in row.iteritems() if not pd.isnull(j)]
                 }])
         elif isinstance(attrs, pd.Series):
             attr_list = [{
                 'name':i,
                 'entityType':etype,
                 'operations': [{"op": "AddUpdateAttribute", "attributeName":attrs.name, "addUpdateAttribute":str(j)}]
-            } for i,j in attrs.iteritems()]
+            } for i,j in attrs.iteritems() if not pd.isnull(j)]
         else:
             raise ValueError('Unsupported input format.')
 
