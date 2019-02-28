@@ -589,7 +589,7 @@ class WorkspaceManager(object):
             state_df.loc[i] = [metadata['calls'][t][-1]['executionStatus'] if t in metadata['calls'] else 'Waiting' for t in workflow_tasks]
         print()
         state_df.rename(columns={i:i.split('.')[1] for i in state_df.columns}, inplace=True)
-        summary_df = pd.concat([state_df[c].value_counts() for c in state_df], axis=1).fillna(0).astype(int)
+        summary_df = state_df.apply(lambda x : x.value_counts(), axis = 0).fillna(0).astype(int)
         print(summary_df)
         state_df[['workflow_id', 'submission_id']] = status_df.loc[ix, ['workflow_id', 'submission_id']]
 
