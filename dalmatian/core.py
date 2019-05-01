@@ -521,8 +521,7 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
     if r.status_code==201:
         print("Successfully pushed {}/{}. New SnapshotID: {}".format(namespace, method, r.json()['snapshotId']))
     else:
-        print(r.text)
-        raise ValueError('Update failed.')
+        raise APIException('Update failed', r)
 
     if public:
         print('  * setting public read access.')
@@ -532,8 +531,9 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
     if old_version is not None and delete_old:
         r = firecloud.api.delete_repository_method(namespace, method, old_version)
         if r.status_code != 200:
-            raise APIException(r)
+            raise APIException("Delete failed", r)
         print("Successfully deleted SnapshotID {}.".format(old_version))
+    
 
 
 #------------------------------------------------------------------------------

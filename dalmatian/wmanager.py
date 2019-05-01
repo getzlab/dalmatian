@@ -7,6 +7,8 @@ import sys
 import io
 from collections import defaultdict
 from functools import wraps, partial
+import time
+import tempfile
 import firecloud.api
 from firecloud import fiss
 import iso8601
@@ -532,7 +534,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
     get_configuration = get_config
 
     @_synchronized
-    def update_config(self, config):
+    def update_config(self, config, wdl=None, synopsis=None):
         """
         Create or update a method configuration (separate API calls)
 
@@ -548,9 +550,33 @@ class WorkspaceManager(LegacyWorkspaceManager):
            'deleted': False
         }
 
+        Optionally, if wdl is not None, upload wdl as the latest version of the method.
+        Method namespace and name are taken from config['methodRepoMethod']
+        wdl may be a filepath or literal WDL text.
+
+        If synopsis is None, a sensible default is used
+
         """
         if "namespace" not in config or "name" not in config:
             raise ValueError("Config missing required keys 'namespace' and 'name'")
+        mnamespace = confog['methodRepoMethod']['methodNamespace']
+        mname = config['methodRepoMethod']['methodName']
+        if wdl is not None:
+            with contextlib.ExitStack() as stack:
+                if not os.path.isfile(wdl):
+                    tmp = tempfile.NamedTemporaryFile('w', suffix='.wdl')
+                    stack.enter_context(tmp)
+                    tmp.write(wdl)
+                    wdl = tmp.name
+                if synopsis is None:
+                    synopsis = "Runs " + mname
+                update_method(mnamespace, mname, synopsis, wdl)
+                time.sleep(5)
+        if config['methodRepoMethod']['methodVersion'] == 'latest':
+            config['methodRepoMethod']['methodVersion'] = get_method_version(
+                mnamespace,
+                mname
+            )
         identifier = '{}/{}'.format(config['namespace'], config['name'])
         key = 'config:' + identifier
         self.cache[key] = config # add full config object to cache
