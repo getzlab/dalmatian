@@ -13,6 +13,60 @@ import pytz
 from datetime import datetime
 from .core import *
 
+#------------------------------------------------------------------------------
+#  Extension of firecloud.api functionality using the rawls (internal) API
+#------------------------------------------------------------------------------
+def _batch_update_entities(namespace, workspace, json_body):
+    """ Batch update entity attributes in a workspace.
+
+    Args:
+        namespace (str): project to which workspace belongs
+        workspace (str): Workspace name
+        json_body (list(dict)):
+        [{
+            "name": "string",
+            "entityType": "string",
+            "operations": (list(dict))
+        }]
+
+        operations:
+        [{
+          "op": "AddUpdateAttribute",
+          "attributeName": "string",
+          "addUpdateAttribute": "string"
+        },
+        {
+          "op": "RemoveAttribute",
+          "attributeName": "string"
+        },
+        {
+          "op": "AddListMember",
+          "attributeListName": "string",
+          "newMember": "string"
+        },
+        {
+          "op": "RemoveListMember",
+          "attributeListName": "string",
+          "removeMember": "string"
+        },
+        {
+          "op": "CreateAttributeEntityReferenceList",
+          "attributeListName": "string"
+        },
+        {
+          "op": "CreateAttributeValueList",
+          "attributeListName": "string"
+        }]
+
+    Swagger:
+        https://rawls.dsde-prod.broadinstitute.org/#!/entities/batch_update_entities
+    """
+    headers = firecloud.api._fiss_agent_header({"Content-type":  "application/json"})
+    uri = "{0}workspaces/{1}/{2}/entities/batchUpdate".format(
+        'https://rawls.dsde-prod.broadinstitute.org/api/', namespace, workspace)
+
+    return firecloud.api.__post(uri, headers=headers, json=json_body)
+
 class LegacyWorkspaceManager(object):
     def __init__(self, namespace, workspace=None, timezone='America/New_York'):
         if workspace is None:

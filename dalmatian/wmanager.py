@@ -76,62 +76,6 @@ def _firecloud_api_timeout_wrapper(*args, **kwargs):
 # Monkey Patch the wrapped request method
 getattr(firecloud.api, "__SESSION").request = _firecloud_api_timeout_wrapper
 
-
-#------------------------------------------------------------------------------
-#  Extension of firecloud.api functionality using the rawls (internal) API
-#------------------------------------------------------------------------------
-def _batch_update_entities(namespace, workspace, json_body):
-    """ Batch update entity attributes in a workspace.
-
-    Args:
-        namespace (str): project to which workspace belongs
-        workspace (str): Workspace name
-        json_body (list(dict)):
-        [{
-            "name": "string",
-            "entityType": "string",
-            "operations": (list(dict))
-        }]
-
-        operations:
-        [{
-          "op": "AddUpdateAttribute",
-          "attributeName": "string",
-          "addUpdateAttribute": "string"
-        },
-        {
-          "op": "RemoveAttribute",
-          "attributeName": "string"
-        },
-        {
-          "op": "AddListMember",
-          "attributeListName": "string",
-          "newMember": "string"
-        },
-        {
-          "op": "RemoveListMember",
-          "attributeListName": "string",
-          "removeMember": "string"
-        },
-        {
-          "op": "CreateAttributeEntityReferenceList",
-          "attributeListName": "string"
-        },
-        {
-          "op": "CreateAttributeValueList",
-          "attributeListName": "string"
-        }]
-
-    Swagger:
-        https://rawls.dsde-prod.broadinstitute.org/#!/entities/batch_update_entities
-    """
-    headers = firecloud.api._fiss_agent_header({"Content-type":  "application/json"})
-    uri = "{0}workspaces/{1}/{2}/entities/batchUpdate".format(
-        'https://rawls.dsde-prod.broadinstitute.org/api/', namespace, workspace)
-
-    return firecloud.api.__post(uri, headers=headers, json=json_body)
-
-
 #------------------------------------------------------------------------------
 #  Top-level classes representing workspace(s)
 #------------------------------------------------------------------------------
@@ -195,7 +139,7 @@ def _read_from_cache(key, message=None):
         @wraps(func)
         def call(self, *args, **kwargs):
             if callable(key):
-                _key = key(*args, **kwargs)
+                _key = key(self, *args, **kwargs)
             else:
                 _key = key
             if self.live:
@@ -211,7 +155,7 @@ def _read_from_cache(key, message=None):
     return decorator
 
 @contextlib.contextmanager
-def capure(display=True):
+def capture(display=True):
     """
     Context manager to redirect stdout and err
     """
@@ -446,7 +390,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 if name not in selector:
                     # Apply the manual translated update to this row
                     translations |= self.__df_upload_translation_layer_internal(func, workspace, etype, data)
-                func(etype, updates.loc[[*selector]], *args)
+            func(etype, updates.loc[[*selector]], *args)
         else:
             response = self.__patch(
                 '/api/workspaces/{}/{}/entities/{}/{}'.format(
@@ -476,6 +420,9 @@ class WorkspaceManager(LegacyWorkspaceManager):
             else:
                 translations = True
         return translations
+
+    def _get_entities_internal(self, etype):
+        return getattr(self, 'get_{}s'.format(etype))()
 
     # =============
     # Operator Cache Method Overrides
@@ -513,7 +460,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             ))
 
     @_synchronized
-    @_read_from_cache(lambda cnamespace, config=None: 'config:{}'.format(self.fetch_config_name(cnamespace, config)))
+    @_read_from_cache(lambda self, cnamespace, config=None: 'config:{}'.format(self.fetch_config_name(cnamespace, config)))
     def get_config(self, cnamespace, config=None):
         """
         Get workspace configuration JSON
@@ -522,7 +469,9 @@ class WorkspaceManager(LegacyWorkspaceManager):
         2) cnamespace = "namespace/name"; config = None
         3) cnamespace = name; config = None
         """
-        key = 'config:{}'.format(self.fetch_config_name(cnamespace, config))
+        canonical = self.fetch_config_name(cnamespace, config)
+        cnamespace, config = canonical.split('/')
+        key = 'config:{}'.format(canonical)
         with self.timeout(key):
             return self.tentative_json(firecloud.api.get_workspace_config(
                 self.namespace,
@@ -635,7 +584,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             )
 
     @_synchronized
-    @_read_from_cache(lambda etype, page_size=1000: "entities:{}".format(etype))
+    @_read_from_cache(lambda self, etype, page_size=1000: "entities:{}".format(etype))
     def get_entities(self, etype, page_size=1000):
         """Paginated query replacing get_entities_tsv()"""
         key = "entities:{}".format(etype)
@@ -772,7 +721,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             ))
         if self.live:
             try:
-                self.get_entities_df(etype)
+                self._get_entities_internal(etype)
             except APIException:
                 pass
 
@@ -832,7 +781,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             ))
         else:
             try:
-                self.get_entities_df(etype+'_set')
+                self._get_entities_internal(etype+'_set')
             except APIException:
                 pass
 
@@ -968,15 +917,17 @@ class WorkspaceManager(LegacyWorkspaceManager):
         """
         if config_name is not None:
             config_slug = '{}/{}'.format(config_slug, config_name)
+        if isinstance(config_slug, dict):
+            config_slug = '{}/{}'.format(config_slug['namespace'], config_slug['name'])
         configs = self.list_configs()
         candidates = [] # For configs just matching name
         for config in configs:
             if config_slug == '%s/%s' % (config['namespace'], config['name']):
-                return config
+                return '{}/{}'.format(config['namespace'], config['name'])
             elif config_slug == config['name']:
                 candidates.append(config)
         if len(candidates) == 1:
-            return candidates[0]
+            return '{}/{}'.format(candidates[0]['namespace'], candidates[0]['name'])
         elif len(candidates) > 1:
             raise ConfigNotUnique('%d configs matching name "%s". Use a full config slug' % (len(candidates), config_slug))
         raise ConfigNotFound('No such config "%s"' % config_slug)
@@ -994,7 +945,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.sync()
         self.get_attributes()
         for etype in self.entity_types:
-            self.operator.get_entities_df(etype)
+            self.operator._get_entities_internal(etype)
         for config in self.configs:
             self.get_config(config)
         self.sync()
