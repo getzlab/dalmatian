@@ -6,7 +6,7 @@ running lapdog jobs into dalmatian
 ## Workspace Model
 - [x] Automated Entity uploads
   * Get rid of the separation between `prepare_*_df` and `upload_*`
-- [ ] Automated attribute uploads
+- [x] Automated attribute uploads
   * Include lapdog's kwarg syntax
 
 ## Methods
@@ -48,3 +48,7 @@ Any features which were not specific to running Lapdog jobs have been migrated.
 ## New Features
 * [Blob API](https://googleapis.github.io/google-cloud-python/latest/storage/index.html) now available via `dalmatian.getblob`
 * `dalmatian.WorkspaceManager.upload_entities` now automatically checks for and uploads valid filepaths present in the dataframe
+* `dalmatian.WorkspaceManager.update_attributes` now automatically checks for and uploads valid filepaths present in the attributes
+
+## Other Changes
+* `dalmatian.WorkspaceManager.update_attributes` can now take attributes as keyword arguments in addition to providing a premade dictionary

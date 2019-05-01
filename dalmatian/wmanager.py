@@ -144,3 +144,25 @@ class WorkspaceManager(LegacyWorkspaceManager):
             staged_df,
             index
         )
+
+    def update_attributes(self, attr_dict=None, **kwargs):
+        """
+        Set or update workspace attributes. Wrapper for API 'set' call
+        Accepts a dictionary of attribute:value pairs and/or keyword arguments.
+        Updates workspace attributes using the combination of the attr_dict and any keyword arguments
+        Any values which reference valid filepaths will be uploaded to the workspace
+        """
+        if attr_dict is None:
+            attr_dict = {}
+        attr_dict.update(kwargs)
+        base_path = 'gs://{}/workspace'.format(self.get_bucket_id())
+        uploads = []
+        for key, value in attr_dict.items():
+            if isinstance(value, str) and os.path.isfile(value):
+                path = '{}/{}'.format(base_path, os.path.basename(value))
+                uploads.append(upload_to_blob(value, path))
+                attr_dict[key] = path
+        if len(uploads):
+            [callback() for callback in status_bar.iter(uploads, prepend="Uploading attributes ")]
+        super().update_attributes(attr_dict)
+        return attr_dict
