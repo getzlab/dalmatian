@@ -31,7 +31,8 @@ setup(
     'firecloud',
     'ipython',
     'iso8601',
-    "google-cloud-storage>=1.13.2"
+    "google-cloud-storage>=1.13.2",
+    "agutil>=4.0.2"
     ],
     classifiers = [
         "Programming Language :: Python :: 2",

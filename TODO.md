@@ -4,7 +4,7 @@ This branch is dedicated towards bringing all features which are not specific to
 running lapdog jobs into dalmatian
 
 ## Workspace Model
-- [ ] Automated Entity uploads
+- [x] Automated Entity uploads
   * Get rid of the separation between `prepare_*_df` and `upload_*`
 - [ ] Automated attribute uploads
   * Include lapdog's kwarg syntax
@@ -31,6 +31,7 @@ running lapdog jobs into dalmatian
 ## Other
 - [x] Migrate GetBlob API
 - [ ] Integrate ACL API
+- [ ] Properties!
 
 # Writeup
 
@@ -46,3 +47,4 @@ Any features which were not specific to running Lapdog jobs have been migrated.
 
 ## New Features
 * [Blob API](https://googleapis.github.io/google-cloud-python/latest/storage/index.html) now available via `dalmatian.getblob`
+* `dalmatian.WorkspaceManager.upload_entities` now automatically checks for and uploads valid filepaths present in the dataframe

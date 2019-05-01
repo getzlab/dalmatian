@@ -12,6 +12,7 @@ import binascii, base64
 import argparse
 import multiprocessing as mp
 from functools import lru_cache
+from agutil.parallel import parallelize2
 from google.cloud import storage
 
 # Collection of high-level wrapper functions for FireCloud API
@@ -561,6 +562,8 @@ def getblob(gs_path, credentials=None, user_project=None):
     When interacting with a requester pays bucket, you must set `user_project` to
     be the name of the project to bill for the data transfer fees
     """
+    if not gs_path.startswith('gs://'):
+        raise ValueError("Getblob path must start with gs://")
     bucket_id = gs_path[5:].split('/')[0]
     bucket_path = '/'.join(gs_path[5:].split('/')[1:])
     return storage.Blob(
@@ -604,6 +607,30 @@ def moveblob(src, dest, credentials=None, user_project=None):
         return True
     return False
 
+@parallelize2(5)
+def upload_to_blob(source, dest, allow_composite=True):
+    """
+    Uploads {source} to google cloud.
+    Result google cloud path is {dest}.
+    If the file to upload is larger than 4Gib, the file will be uploaded via
+    a composite upload.
+
+    WARNING: You MUST set allow_composite to False if you are uploading to a nearline
+    or coldline bucket. The composite upload will incur large fees from deleting
+    the temporary objects
+
+    This function starts the upload on a background thread and returns a callable
+    object which can be used to wait for the upload to complete. Calling the object
+    blocks until the upload finishes, and will raise any exceptions encountered
+    by the background thread. This function allows up to 5 concurrent uploads, beyond
+    which workers will be queued until there is an empty execution slot.
+    """
+    if isinstance(dest, str):
+        dest = getblob(dest)
+    if allow_composite and os.path.isfile(source) and os.path.getsize(source) >= 2865470566: #2.7gib
+        dest.chunk_size = 104857600 # ~100mb
+    dest.upload_from_filename(source)
+    return dest
 
 def main(argv=None):
     if not argv:
