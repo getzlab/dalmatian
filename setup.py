@@ -30,7 +30,8 @@ setup(
     'pytz',
     'firecloud',
     'ipython',
-    'iso8601'
+    'iso8601',
+    "google-cloud-storage>=1.13.2"
     ],
     classifiers = [
         "Programming Language :: Python :: 2",

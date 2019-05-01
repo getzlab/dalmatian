@@ -11,6 +11,8 @@ import iso8601
 import binascii, base64
 import argparse
 import multiprocessing as mp
+from functools import lru_cache
+from google.cloud import storage
 
 # Collection of high-level wrapper functions for FireCloud API
 
@@ -541,6 +543,56 @@ def get_vm_cost(machine_type, preemptible=True):
         return preemptible_dict[machine_type]
     else:
         return standard_dict[machine_type]
+
+# Lapdog Utilities
+
+# Using the LRU cache allows us to use one common Client
+# throughout the entire program
+@lru_cache()
+def _getblob_client(credentials):
+    return storage.Client(credentials=credentials)
+
+def getblob(gs_path, credentials=None, user_project=None):
+    """
+    Return a GCP "blob" object for a given gs:// path.
+    Path must start with "gs://".
+    By default, uses the current application default credentials for authentication.
+    Alternatively, you may provide a `google.auth.Credentials` object.
+    When interacting with a requester pays bucket, you must set `user_project` to
+    be the name of the project to bill for the data transfer fees
+    """
+    bucket_id = gs_path[5:].split('/')[0]
+    bucket_path = '/'.join(gs_path[5:].split('/')[1:])
+    return storage.Blob(
+        bucket_path,
+        _getblob_client(credentials).bucket(bucket_id, user_project)
+    )
+
+def copyblob(src, dest, credentials=None, user_project=None):
+    """
+    Copy blob from src -> dest
+    src and dest may either be a gs:// path or a premade blob object
+    """
+    if isinstance(src, str):
+        src = getblob(src, credentials, user_project)
+    if isinstance(dest, str):
+        dest = getblob(dest, credentials, user_project)
+    src.bucket.copy_blob(src, dest.bucket, dest.name)
+    return dest.exists()
+
+def moveblob(src, dest, credentials=None, user_project=None):
+    """
+    Move blob from src -> dest
+    src and dest may either be a gs:// path or a premade blob object
+    """
+    if isinstance(src, str):
+        src = getblob(src, credentials, user_project)
+    if isinstance(dest, str):
+        dest = getblob(dest, credentials, user_project)
+    if copyblob(src, dest):
+        src.delete()
+        return True
+    return False
 
 
 def main(argv=None):
