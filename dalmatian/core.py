@@ -568,6 +568,16 @@ def getblob(gs_path, credentials=None, user_project=None):
         _getblob_client(credentials).bucket(bucket_id, user_project)
     )
 
+def strict_getblob(gs_path, credentials=None, user_project=None):
+    """
+    Like getblob(), but raises a FileNotFound error if the path does
+    not already exist
+    """
+    blob = getblob(gs_path, credentials, user_project)
+    if not blob.exists():
+        raise FileNotFoundError("No such blob: "+gs_path)
+    return blob
+
 def copyblob(src, dest, credentials=None, user_project=None):
     """
     Copy blob from src -> dest
