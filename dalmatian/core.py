@@ -14,9 +14,41 @@ import multiprocessing as mp
 from functools import lru_cache
 from agutil.parallel import parallelize2
 from google.cloud import storage
+import requests
 
 # Collection of high-level wrapper functions for FireCloud API
 
+class APIException(ValueError):
+    """
+    Class for generic FireCloud errors
+    """
+    def __init__(self, *args, **kwargs):
+        if len(args)==2 and isinstance(args[0], str) and isinstance(args[1], requests.Response):
+            return super().__init__(
+                "{}; ({}) : {}".format(args[0], args[1].status_code, args[1].text),
+                **kwargs
+            )
+        elif len(args)==1 and isinstance(args[0], requests.Response):
+            return super().__init__(
+                "({}) : {}".format(args[0].status_code, args[0].text),
+                **kwargs
+            )
+        return super().__init__(
+            *args,
+            **kwargs
+        )
+
+def assert_status_code(response, condition, message=None):
+    """
+    Shorthand for checking status code
+    response: a requests.Response object
+    condition: boolean indicating if the response is acceptable or not
+    message: (optional) string message indicating what failed
+    """
+    if not condition:
+        if message is not None:
+            raise APIException(message, response)
+        raise APIException(response)
 
 #------------------------------------------------------------------------------
 #  Helper functions for processing timestamps
@@ -95,7 +127,8 @@ def _gsutil_cp_wrapper(args):
 
 def gs_copy_par(source_paths, dest_paths, num_threads=10):
     """Parallel gsutil cp"""
-    assert len(source_paths)==len(dest_paths)
+    if len(source_paths) != len(dest_paths):
+        raise ValueError("list of source and destination paths must be of equal length")
     res_list = []
     print('Starting cp pool ({} threads)'.format(num_threads), flush=True)
     with mp.Pool(processes=int(num_threads)) as pool:
@@ -247,7 +280,8 @@ def list_workspaces():
 def list_methods(namespace=None):
     """List all methods in the repository"""
     r = firecloud.api.list_repository_methods()
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     r = r.json()
 
     if namespace is not None:
@@ -259,7 +293,8 @@ def list_methods(namespace=None):
 def get_method(namespace, name):
     """Get all available versions of a method from the repository"""
     r = firecloud.api.list_repository_methods()
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     r = r.json()
     r = [m for m in r if m['name']==name and m['namespace']==namespace]
     return r
@@ -274,7 +309,8 @@ def get_method_version(namespace, name):
 def list_configs(namespace=None):
     """List all configurations in the repository"""
     r = firecloud.api.list_repository_configs()
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     r = r.json()
 
     if namespace is not None:
@@ -286,7 +322,8 @@ def list_configs(namespace=None):
 def get_config(namespace, name):
     """Get all versions of a configuration from the repository"""
     r = firecloud.api.list_repository_configs()
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     r = r.json()
     r = [m for m in r if m['name']==name and m['namespace']==namespace]
     return r
@@ -303,7 +340,8 @@ def get_config_json(namespace, name, snapshot_id=None):
     if snapshot_id is None:  # get latest version
         snapshot_id = get_config_version(namespace, name)
     r = firecloud.api.get_repository_config(namespace, name, snapshot_id)
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     return json.loads(r.json()['payload'])
 
 
@@ -312,7 +350,8 @@ def get_config_template(namespace, method, version=None):
     if version is None:
         version = get_method_version(namespace, method)
     r = firecloud.api.get_config_template(namespace, method, version)
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     return r.json()
 
 
@@ -373,7 +412,8 @@ def autofill_config_template(namespace, method, workflow_inputs):
 def print_methods(namespace):
     """Print all methods in a namespace"""
     r = firecloud.api.list_repository_methods()
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     r = r.json()
     r = [m for m in r if m['namespace']==namespace]
     methods = np.unique([m['name'] for m in r])
@@ -384,7 +424,8 @@ def print_methods(namespace):
 def print_configs(namespace):
     """Print all configurations in a namespace"""
     r = firecloud.api.list_repository_configs()
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     r = r.json()
     r = [m for m in r if m['namespace']==namespace]
     configs = np.unique([m['name'] for m in r])
@@ -399,7 +440,8 @@ def get_wdl(method_namespace, method_name, snapshot_id=None):
         print('Using latest snapshot: {}'.format(snapshot_id))
 
     r = firecloud.api.get_repository_method(method_namespace, method_name, snapshot_id)
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     return r.json()['payload']
 
 
@@ -439,7 +481,8 @@ def redact_method(method_namespace, method_name, mode='outdated'):
     """
     assert mode in ['outdated', 'latest', 'all']
     r = firecloud.api.list_repository_methods()
-    assert r.status_code==200
+    if r.status_code != 200:
+        raise APIException(r)
     r = r.json()
     r = [m for m in r if m['name']==method_name and m['namespace']==method_namespace]
     versions = np.sort([m['snapshotId'] for m in r])
@@ -451,7 +494,8 @@ def redact_method(method_namespace, method_name, mode='outdated'):
     for i in versions:
         print('  * deleting version {}'.format(i))
         r = firecloud.api.delete_repository_method(method_namespace, method_name, i)
-        assert r.status_code==200
+        if r.status_code != 200:
+        raise APIException(r)
 
 
 def update_method(namespace, method, synopsis, wdl_file, public=False, delete_old=True):
@@ -481,7 +525,8 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
     # delete old version
     if old_version is not None and delete_old:
         r = firecloud.api.delete_repository_method(namespace, method, old_version)
-        assert r.status_code==200
+        if r.status_code != 200:
+        raise APIException(r)
         print("Successfully deleted SnapshotID {}.".format(old_version))
 
 

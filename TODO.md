@@ -14,7 +14,7 @@ running lapdog jobs into dalmatian
 - [ ] Add handling for method metadata inference from config
 
 ## Operator
-- [ ] Replace assertions with APIExceptions
+- [x] Replace assertions with APIExceptions
 - [ ] Integrate internal cache with lapdog parity
   * Actually remove the array translator from `upload_*` methods
 - [ ] Integrate expression evaluator
@@ -52,3 +52,4 @@ Any features which were not specific to running Lapdog jobs have been migrated.
 
 ## Other Changes
 * `dalmatian.WorkspaceManager.update_attributes` can now take attributes as keyword arguments in addition to providing a premade dictionary
+* Replaced `AssertionErrors` with `APIExceptions`, which are more descriptive and easier to handle
