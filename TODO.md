@@ -31,7 +31,7 @@ running lapdog jobs into dalmatian
 ## Other
 - [x] Migrate GetBlob API
 - [ ] Integrate ACL API
-- [ ] Properties!
+- [x] Properties!
 
 # Writeup
 

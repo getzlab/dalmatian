@@ -106,6 +106,45 @@ class WorkspaceManager(LegacyWorkspaceManager):
     # 1) The code is now split between 2 files
     # 2) Base workspace manager functions are now segregated from higher level operator/caching functions
 
+    # Properties:
+
+    @property
+    def bucket_id(self):
+        return self.get_bucket_id()
+
+    @property
+    def samples(self):
+        return self.get_samples()
+
+    @property
+    def sample_sets(self):
+        return self.get_sample_sets()
+
+    @property
+    def pairs(self):
+        return self.get_pairs()
+
+    @property
+    def pair_sets(self):
+        return self.get_pair_sets()
+
+    @property
+    def participants(self):
+        return self.get_participants()
+
+    @property
+    def participant_sets(self):
+        return self.get_participant_sets()
+
+    @property
+    def attributes(self):
+        return self.get_attributes()
+
+    @property
+    def configs(self):
+        return self.list_configs()
+
+    configurations = configs
 
     def upload_entities(self, etype, df, index=True):
         """
