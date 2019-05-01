@@ -25,7 +25,7 @@ class APIException(ValueError):
     def __init__(self, *args, **kwargs):
         if len(args)==2 and isinstance(args[0], str) and isinstance(args[1], requests.Response):
             return super().__init__(
-                "{}; ({}) : {}".format(args[0], args[1].status_code, args[1].text),
+                "{}: ({}) : {}".format(args[0], args[1].status_code, args[1].text),
                 **kwargs
             )
         elif len(args)==1 and isinstance(args[0], requests.Response):
@@ -495,7 +495,7 @@ def redact_method(method_namespace, method_name, mode='outdated'):
         print('  * deleting version {}'.format(i))
         r = firecloud.api.delete_repository_method(method_namespace, method_name, i)
         if r.status_code != 200:
-        raise APIException(r)
+            raise APIException(r)
 
 
 def update_method(namespace, method, synopsis, wdl_file, public=False, delete_old=True):
@@ -526,7 +526,7 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
     if old_version is not None and delete_old:
         r = firecloud.api.delete_repository_method(namespace, method, old_version)
         if r.status_code != 200:
-        raise APIException(r)
+            raise APIException(r)
         print("Successfully deleted SnapshotID {}.".format(old_version))
 
 

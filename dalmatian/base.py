@@ -839,11 +839,8 @@ class LegacyWorkspaceManager(object):
                 etype, page=page, page_size=page_size)
         if r.status_code == 200:
             return r.json()
-        elif r.status_code >= 400:
-            raise APIException(r)
         else:
-            print(r.text)
-
+            raise APIException(r)
 
     def get_entities(self, etype, page_size=1000):
         """Paginated query replacing get_entities_tsv()"""
@@ -868,16 +865,16 @@ class LegacyWorkspaceManager(object):
     def get_samples(self):
         """Get DataFrame with samples and their attributes"""
         df = self.get_entities('sample')
-        df['participant'] = df['participant'].apply(lambda x: x['entityName'])
+        df['participant'] = df['participant'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
         return df
 
 
     def get_pairs(self):
         """Get DataFrame with pairs and their attributes"""
         df = self.get_entities('pair')
-        df['participant'] = df['participant'].apply(lambda x: x['entityName'])
-        df['case_sample'] = df['case_sample'].apply(lambda  x: x['entityName'])
-        df['control_sample'] = df['control_sample'].apply(lambda x: x['entityName'])
+        df['participant'] = df['participant'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
+        df['case_sample'] = df['case_sample'].apply(lambda  x: x['entityName'] if isinstance(x, dict) else x)
+        df['control_sample'] = df['control_sample'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
         return df
 
 
@@ -886,7 +883,7 @@ class LegacyWorkspaceManager(object):
         df = self.get_entities('participant')
         # convert sample lists from JSON
         df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
-                            if np.all(pd.notnull(x)) and isinstance(x, list) else x)
+                            if isinstance(x, list) and np.all(pd.notnull(x)) else x)
         return df
 
 
@@ -895,7 +892,7 @@ class LegacyWorkspaceManager(object):
         df = self.get_entities('sample_set')
         # convert sample lists from JSON
         df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
-                            if np.all(pd.notnull(x)) and isinstance(x, list) else x)
+                            if isinstance(x, list) and np.all(pd.notnull(x)) else x)
         return df
 
 
@@ -904,14 +901,14 @@ class LegacyWorkspaceManager(object):
         df = self.get_entities('participant_set')
         # convert sample lists from JSON
         df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
-                            if np.all(pd.notnull(x)) and isinstance(x, list) else x)
+                            if isinstance(x, list) and np.all(pd.notnull(x)) else x)
         return df
 
 
     def get_pair_sets(self):
         """Get DataFrame with sample sets and their attributes"""
         df = self.get_entities('pair_set')
-        df['pairs'] = df['pairs'].apply(lambda x: [i['entityName'] for i in x])
+        df['pairs'] = df['pairs'].apply(lambda x: [i['entityName'] for i in x] if isinstance(x, list) and np.all(pd.notnull(x)) else x)
 
         # # convert JSON to table
         # columns = np.unique([k for s in df for k in s['attributes'].keys()])
@@ -955,6 +952,7 @@ class LegacyWorkspaceManager(object):
             if r.status_code == 200:
                 print('{} set "{}" ({} {}s) successfully updated.'.format(
                     etype.capitalize(), set_id, len(entity_ids), etype))
+                return True
             elif r.status_code >= 400:
                 raise APIException(r)
             else:
@@ -965,6 +963,8 @@ class LegacyWorkspaceManager(object):
                 columns=['membership:{}_set_id'.format(etype), '{}_id'.format(etype)]
             )
             self.upload_entities('{}_set'.format(etype), set_df, index=False)
+            return True
+        return False
 
 
     def update_sample_set(self, sample_set_id, sample_ids):

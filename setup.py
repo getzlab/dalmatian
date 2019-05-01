@@ -32,7 +32,8 @@ setup(
     'ipython',
     'iso8601',
     "google-cloud-storage>=1.13.2",
-    "agutil>=4.0.2"
+    "agutil>=4.0.2",
+    "crayons>=0.2.0"
     ],
     classifiers = [
         "Programming Language :: Python :: 2",
