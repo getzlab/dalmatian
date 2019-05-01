@@ -50,6 +50,12 @@ def assert_status_code(response, condition, message=None):
             raise APIException(message, response)
         raise APIException(response)
 
+class ConfigNotFound(KeyError):
+    pass
+
+class ConfigNotUnique(KeyError):
+    pass
+
 #------------------------------------------------------------------------------
 #  Helper functions for processing timestamps
 #------------------------------------------------------------------------------

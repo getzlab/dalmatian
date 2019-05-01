@@ -29,6 +29,7 @@ class LegacyWorkspaceManager(object):
             r = firecloud.api.create_workspace(self.namespace, self.workspace)
             if r.status_code==201:
                 print('Workspace {}/{} successfully created.'.format(self.namespace, self.workspace))
+                return True
             elif r.status_code==409:
                 print(r.json()['message'])
             else:
@@ -38,10 +39,12 @@ class LegacyWorkspaceManager(object):
             if r.status_code == 201:
                 print('Workspace {}/{} successfully cloned from {}/{}.'.format(
                     self.namespace, self.workspace, wm.namespace, wm.workspace))
+                return True
             elif r.status_code >= 400:
                 raise APIException(r)
             else:
                 print(r.text)
+        return False
 
 
     def delete_workspace(self):

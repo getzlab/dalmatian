@@ -6,7 +6,7 @@ import os
 import sys
 import io
 from collections import defaultdict
-from functools import wraps, parital
+from functools import wraps, partial
 import firecloud.api
 from firecloud import fiss
 import iso8601
@@ -303,7 +303,11 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     traceback.print_exc()
         self.pending_operations = [item for item in failures]
         self.live = not len(self.pending_operations)
+        if len(exceptions):
+            print("There were", len(exceptions), "exceptions while attempting to sync with firecloud")
         return self.live, exceptions
+
+    sync = go_live
 
     @_synchronized
     def tentative_json(self, result, *expected_failures):
@@ -342,7 +346,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         try:
             with set_timeout(self.timeout_for_key(key)):
                 yield
-        except ReadTimeout:
+        except requests.ReadTimeout:
             self.go_offline()
 
     def call_with_timeout(self, key, func, *args, **kwargs):
@@ -354,7 +358,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         try:
             with set_timeout(self.timeout_for_key(key)):
                 return func(*args, **kwargs)
-        except ReadTimeout:
+        except requests.ReadTimeout:
             self.go_offline()
             # Do not silence the exception
             # call_with_timeout is used for background calls
@@ -507,10 +511,16 @@ class WorkspaceManager(LegacyWorkspaceManager):
             ))
 
     @_synchronized
-    @_read_from_cache(lambda cnamespace, config: 'config:{}/{}'.format(cnamespace, config))
-    def get_config(self, cnamespace, config):
-        """Get workspace configuration JSON"""
-        key = 'config:{}/{}'.format(cnamespace, config)
+    @_read_from_cache(lambda cnamespace, config=None: 'config:{}'.format(self.fetch_config_name(cnamespace, config)))
+    def get_config(self, cnamespace, config=None):
+        """
+        Get workspace configuration JSON
+        Accepts the following formats:
+        1) cnamespace = namespace; config = name
+        2) cnamespace = "namespace/name"; config = None
+        3) cnamespace = name; config = None
+        """
+        key = 'config:{}'.format(self.fetch_config_name(cnamespace, config))
         with self.timeout(key):
             return self.tentative_json(firecloud.api.get_workspace_config(
                 self.namespace,
@@ -518,6 +528,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 cnamespace,
                 config
             ))
+
+    get_configuration = get_config
 
     @_synchronized
     def update_config(self, config):
@@ -678,8 +690,9 @@ class WorkspaceManager(LegacyWorkspaceManager):
           To update a single attribute for a single entity, use:
             pd.Series({entity_name:attr_value}, name=attr_name)
         """
-        if isinstance(attrs, pd.DataFrame):
-            attrs = self.upload_entity_metadata(etype, attrs.copy())
+        if not isinstance(attrs, pd.DataFrame):
+            return super().update_entity_attributes(etype, attrs)
+        attrs = self.upload_entity_metadata(etype, attrs.copy())
         getter = partial(
             self.call_with_timeout,
             DEFAULT_LONG_TIMEOUT,
@@ -859,43 +872,30 @@ class WorkspaceManager(LegacyWorkspaceManager):
     # Properties
     # =============
 
-    @property
-    def bucket_id(self):
-        return self.get_bucket_id()
+    bucket_id = property(get_bucket_id)
 
-    @property
-    def samples(self):
-        return self.get_samples()
+    samples = property(LegacyWorkspaceManager.get_samples)
 
-    @property
-    def sample_sets(self):
-        return self.get_sample_sets()
+    sample_sets = property(LegacyWorkspaceManager.get_sample_sets)
 
-    @property
-    def pairs(self):
-        return self.get_pairs()
+    pairs = property(LegacyWorkspaceManager.get_pairs)
 
-    @property
-    def pair_sets(self):
-        return self.get_pair_sets()
+    pair_sets = property(LegacyWorkspaceManager.get_pair_sets)
 
-    @property
-    def participants(self):
-        return self.get_participants()
+    participants = property(LegacyWorkspaceManager.get_participants)
 
-    @property
-    def participant_sets(self):
-        return self.get_participant_sets()
+    participant_sets = property(LegacyWorkspaceManager.get_participant_sets)
 
-    @property
-    def attributes(self):
-        return self.get_attributes()
+    attributes = property(get_attributes)
+    attributes.setter(update_attributes)
 
-    @property
-    def configs(self):
-        return self.list_configs()
+    configs = property(list_configs)
 
     configurations = configs
+
+    # =============
+    # Other upgrades
+    # =============
 
     def upload_entity_metadata(self, etype, df):
         """
@@ -930,3 +930,45 @@ class WorkspaceManager(LegacyWorkspaceManager):
 
         # Now upload as normal
         return staged_df
+
+    def fetch_config_name(self, config_slug, config_name=None):
+        """
+        Fetches a configuration by the provided slug (method_config_namespace/method_config_name).
+        If the slug is just the config name, this returns a config
+        with a matching name IFF the name is unique. If another config
+        exists with the same name, this will fail.
+        If the slug is a full slug (namespace/name) this will always return
+        a matching config (slug uniqueness is enforced by firecloud)
+        """
+        if config_name is not None:
+            config_slug = '{}/{}'.format(config_slug, config_name)
+        configs = self.list_configs()
+        candidates = [] # For configs just matching name
+        for config in configs:
+            if config_slug == '%s/%s' % (config['namespace'], config['name']):
+                return config
+            elif config_slug == config['name']:
+                candidates.append(config)
+        if len(candidates) == 1:
+            return candidates[0]
+        elif len(candidates) > 1:
+            raise ConfigNotUnique('%d configs matching name "%s". Use a full config slug' % (len(candidates), config_slug))
+        raise ConfigNotFound('No such config "%s"' % config_slug)
+
+    def populate_cache(self):
+        """
+        Preloads all data from the FireCloud workspace into the in-memory cache.
+        Use in advance of switching offline so that the WorkspaceManager can run in
+        offline mode without issue.
+
+        Call `WorkspaceManager.operator.go_offline()` after this function to switch
+        the workspace into offline mode
+        """
+        if self.live:
+            self.sync()
+        self.get_attributes()
+        for etype in self.entity_types:
+            self.operator.get_entities_df(etype)
+        for config in self.configs:
+            self.get_config(config)
+        self.sync()
