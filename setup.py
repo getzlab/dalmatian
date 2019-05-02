@@ -36,8 +36,8 @@ setup(
     "crayons>=0.2.0"
     ],
     classifiers = [
+        "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3 :: Only",
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
         "Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator",

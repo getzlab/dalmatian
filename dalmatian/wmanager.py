@@ -1210,19 +1210,13 @@ class WorkspaceManager(LegacyWorkspaceManager):
         return PreflightSuccess(True, config, entity, etype, workflow_entities, invalid_inputs)
 
 
-    def create_submission(self, cnamespace, config, entity=None, etype=None, expression=None, use_callcache=True):
+    def create_submission(self, config, entity, etype=None, expression=None, use_callcache=True):
         """
         Validates config parameters then creates a submission in Firecloud.
         Returns the submission id.
         This function does not use the Lapdog Engine, and instead submits a job
         through the FireCloud Rawls API. Use `WorkspaceManager.execute` to run
         jobs through the Lapdog Engine
-
-        Accepts the following argument/keyword argument configurations:
-        1) Legacy: cnamespace=config namespace; config=config name; entity=submission entity;
-        2) Canonical: cnamespace="config_namespace/config_name"; config=submission_entity; entity=None;
-        3) Name Only: cnamespace=config name; config=submission_entity; entity=None; (Only works if name is unique)
-        4) Config Object: cnamespace={config JSON object}; config=submission_entity; entity=None;
         """
         if not self.live:
             warnings.warn(
@@ -1232,12 +1226,6 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     self.workspace
                 )
             )
-        if entity is None:
-            entity = config
-            config = cnamespace
-        else:
-            config = self.fetch_config_name(cnamespace, config)
-
         preflight = self.preflight(config, entity, expression, etype)
         if not preflight.result:
             raise ValueError(preflight.reason)
