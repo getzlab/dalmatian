@@ -65,6 +65,9 @@ Any features which were not specific to running Lapdog jobs have been migrated.
 * `dalmatian.WorkspaceManager.upload_entities` now automatically checks for and uploads valid filepaths present in the dataframe
 * `dalmatian.WorkspaceManager.update_attributes` now automatically checks for and uploads valid filepaths present in the attributes
 * `dalmatian.WorkspaceManager.update_entity_attributes` now automatically attempts to convert native python lists into FireCloud lists
+* `dalmatian.WorkspaceManager.update_participant_entities` now takes an additional
+**optional** argument _target\_set_, which, if specified, restricts the operation
+only to samples/pairs belonging to the given set.
 * `dalmatian.WorkspaceManager.preflight`: new function which can be used to validate
 your submission configuration and entity before sending to firecloud.
 * `dalmatian.WorkspaceManager.validate_config`: new function which can be used to

@@ -136,10 +136,10 @@ def _synchronized(func):
     Use if the function touches the operator cache
     """
     @wraps(func)
-    def wrapper(self, *args, **kwargs):
+    def call_with_lock(self, *args, **kwargs):
         with self.lock:
             return func(self, *args, **kwargs)
-    return wrapper
+    return call_with_lock
 
 def _read_from_cache(key, message=None):
     """
@@ -164,7 +164,7 @@ def _read_from_cache(key, message=None):
     def decorator(func):
 
         @wraps(func)
-        def call(self, *args, **kwargs):
+        def call_using_cache(self, *args, **kwargs):
             # First, if the key is callable, use it to get a string key
             if callable(key):
                 _key = key(self, *args, **kwargs)
@@ -177,13 +177,15 @@ def _read_from_cache(key, message=None):
                 with self.timeout(_key):
                     result = func(self, *args, **kwargs)
                     if result is not None:
+                        if _key in self.dirty:
+                            self.dirty.remove(_key)
                         self.cache[_key] = result
             # Return the cached value, if present
             if _key in self.cache and self.cache[_key] is not None:
                 return self.cache[_key]
             self.fail(message) # Fail otherwise
 
-        return call
+        return call_using_cache
 
     return decorator
 
@@ -478,6 +480,46 @@ class WorkspaceManager(LegacyWorkspaceManager):
             name
         ))
 
+    @_synchronized
+    def _update_participant_entities_internal(self, etype, column, participants, entities):
+
+        @parallelize(3)
+        def update_participant(participant_id):
+            attr_dict = {
+                column: {
+                    "itemsType": "EntityReference",
+                    "items": [{"entityType": etype, "entityName": i} for i in entities[participant_id]]
+                }
+            }
+            attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
+            # It adds complexity to put the context manager here, but
+            # since the timeout is thread-specific it needs to be set within
+            # the thread workers
+            with set_timeout(DEFAULT_SHORT_TIMEOUT):
+                r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', participant_id, attrs)
+            return participant_id, r.status_code
+
+        n_participants = len(participants)
+
+        for attempt in range(5):
+            retries = []
+
+            for k, status in status_bar.iter(update_participant(participants), len(participants), prepend="Updating {}s for participants ".format(etype)):
+                if status >= 400:
+                    retries.append(k)
+
+            if len(retries):
+                if attempt >= 4:
+                    print("\nThe following", len(retries), "participants could not be updated:", ', '.join(retries), file=sys.stderr)
+                    raise APIException("{} participants could not be updated after 5 attempts".format(len(retries)))
+                else:
+                    print("\nRetrying remaining", len(retries), "participants")
+                    participants = [item for item in retries]
+            else:
+                break
+
+        print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
+
     # =============
     # Operator Cache Method Overrides
     # =============
@@ -613,7 +655,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             if result:
                 return result
             self.go_offline()
-        self.pending.append((
+        self.pending_operations.append((
             None,
             partial(self._upload_config, config),
             None
@@ -682,7 +724,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 self.cache[key] = getter()
                 if key in self.dirty:
                     self.dirty.remove(key)
-            except ValueError: # Also accepts APIExceptions
+            except APIException:
                 self.go_offline()
         if not self.live:
             self.pending_operations.append((
@@ -756,10 +798,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 self.cache[key] = getter()
                 if key in self.dirty:
                     self.dirty.remove(key)
-            except ValueError:
+            except APIException:
                 self.go_offline()
         if not self.live:
-            self.pending.append((
+            self.pending_operations.append((
                 key,
                 partial(
                     self._df_upload_translation_layer,
@@ -769,12 +811,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 ),
                 getter
             ))
-            self.pending.append((
+            self.pending_operations.append((
                 'entity_types',
                 None,
-                lambda x=None:self._entities_live_update
+                self._entities_live_update()
             ))
-        if self.live:
+        else:
             try:
                 self._get_entities_internal(etype)
             except APIException:
@@ -824,12 +866,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 self.go_offline()
         if not self.live:
             # offline. Add operations
-            self.pending.append((
+            self.pending_operations.append((
                 key,
                 setter,
                 getter
             ))
-            self.pending.append((
+            self.pending_operations.append((
                 'entity_types',
                 None,
                 lambda x=None:self._entities_live_update
@@ -885,13 +927,13 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 super().update_attributes(attr_dict)
             except AssertionError:
                 self.go_offline()
-        else:
-            self.pending.append((
+        if not self.live:
+            self.pending_operations.append((
                 'workspace',
                 partial(super().update_attributes, attr_dict),
                 partial(self.call_with_timeout, DEFAULT_LONG_TIMEOUT, firecloud.api.get_workspace, self.namespace, self.workspace)
             ))
-        if self.live:
+        else:
             try:
                 self.get_attributes()
             except AssertionError:
@@ -1154,6 +1196,103 @@ class WorkspaceManager(LegacyWorkspaceManager):
             expression,
             use_callcache
         )
+
+    @_synchronized
+    def update_participant_entities(self, etype, target_set=None):
+        """
+        Attach entities (samples or pairs) to participants.
+        If target_set is not None, only perform the update for samples/pairs
+        belonging to the given set
+        Parallelized update to run on 5 entities in parallel
+        """
+        if etype=='sample':
+            df = self.samples[['participant']]
+        elif etype=='pair':
+            df = self.pairs[['participant']]
+        else:
+            raise ValueError('Entity type {} not supported'.format(etype))
+
+        if target_set is not None:
+            df = df.loc[
+                df.index.intersection(
+                    self._get_entities_internal(etype+'_set')[etype+'s'][target_set]
+                )
+            ]
+
+        entities_dict = {k:g.index.values for k,g in df.groupby('participant')}
+        participant_ids = np.unique(df['participant'])
+
+        column = "{}s_{}".format(
+            etype,
+            (target_set if target_set is not None else '')
+        )
+
+        offline_df = pd.DataFrame(
+            {column: [
+                entities_dict[pid] for pid in participant_ids
+            ]},
+            index=participant_ids
+        )
+        offline_df.index.name = 'participant_id'
+
+        # We can't just run update_participant_attributes, because if that goes through,
+        # then we'll have broken attributes in Firecloud
+        key = 'entities:participant'
+        if key not in self.cache or self.cache[key] is None:
+            self.cache[key] = offline_df
+        else:
+            self.cache[key] = self.cache[key].append(
+                offline_df.loc[[k for k in offline_df.index if k not in self.cache[key].index]]
+            )
+            self.cache[key].update(offline_df)
+        self.dirty.add(key)
+        if 'entity_types' not in self.cache:
+            self.cache['entity_types'] = {}
+        self.cache['entity_types'][etype] = {
+            'attributeNames': [*self.cache[key].columns],
+            'count': len(self.cache[key]),
+            'idName': etype+'_id'
+        }
+        self.dirty.add('entity_types')
+
+        # Now attempt to update participant entities live
+        if self.live:
+            try:
+                self._update_participant_entities_internal(
+                    etype,
+                    column,
+                    participant_ids,
+                    entities_dict
+                )
+                if key in self.dirty:
+                    self.dirty.remove(key)
+            except APIException:
+                self.go_offline()
+        if not self.live:
+            self.pending_operations.append((
+                key,
+                partial(
+                    self._update_participant_entities_internal,
+                    etype,
+                    column,
+                    participant_ids,
+                    entities_dict
+                ),
+                partial(
+                    self._get_entities_internal,
+                    'participant'
+                )
+            ))
+            self.pending_operations.append((
+                'entity_types',
+                None,
+                lambda x=None:self._entities_live_update
+            ))
+        else:
+            try:
+                self._get_entities_internal('participant')
+            except APIException:
+                pass
 
     @property
     def acl(self):
