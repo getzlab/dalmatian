@@ -18,7 +18,7 @@ running lapdog jobs into dalmatian
 - [x] Integrate internal cache with lapdog parity
   * Actually remove the array translator from `upload_*` methods
   * Drop wdl from cache. No reason to have this without running jobs offline
-- [ ] Integrate expression evaluator
+- [x] Integrate expression evaluator
 - [ ] Add additional operator cache points
 - [x] Add firecloud timeout shim
 - [ ] Add background synchronizer

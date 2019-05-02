@@ -24,6 +24,7 @@ import crayons
 import warnings
 from .core import *
 from .base import LegacyWorkspaceManager
+from .schema import Evaluator
 
 # =============
 # Shim in FireCloud request timeouts
@@ -944,7 +945,43 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.sync()
         self.get_attributes()
         for etype in self.entity_types:
-            self.operator._get_entities_internal(etype)
+            self._get_entities_internal(etype)
         for config in self.configs:
             self.get_config(config)
         self.sync()
+
+    @_synchronized
+    def evaluate_expression(self, etype, entity, expression):
+        if self.live:
+            with self.timeout(DEFAULT_LONG_TIMEOUT):
+                result = self.tentative_json(
+                    # NAME MANGLING!!!!
+                    getattr(firecloud.api, '__post')(
+                        'workspaces/%s/%s/entities/%s/%s/evaluate' % (
+                            self.namespace,
+                            self.workspace,
+                            etype,
+                            entity
+                        ),
+                        data=expression
+                    ),
+                    400,
+                    404
+                )
+                if result is not None:
+                    return result
+        entity_types = self.entity_types
+        evaluator = Evaluator(entity_types)
+        for _etype, data in entity_types.items():
+            evaluator.add_entities(
+                _etype,
+                self._get_entities_internal(_etype)
+            )
+        if 'workspace' in expression:
+            evaluator.add_attributes(
+                self.attributes
+            )
+        return [
+            item for item in evaluator(etype, entity, expression)
+            if isinstance(item, str) or not np.isnan(item)
+        ]
