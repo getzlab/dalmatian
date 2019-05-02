@@ -21,7 +21,10 @@ running lapdog jobs into dalmatian
 - [x] Integrate expression evaluator
 - [ ] Add additional operator cache points
 - [x] Add firecloud timeout shim
-- [ ] Add background synchronizer
+- [x] Add background synchronizer
+  * WONTFIX: I think the background synchronizer added more uncertainty and problems
+  than it actually solved. In addition, it's less useful in dalmatain than it was
+  in lapdog
 - [x] Robust preflight for firecloud submissions
 - [ ] Add back array translation for uploads (upload first then update using a no-op)
 - [ ] Check handling on Series/Index=False

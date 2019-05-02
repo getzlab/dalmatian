@@ -221,6 +221,14 @@ class WorkspaceManager(LegacyWorkspaceManager):
         self.lock = RLock()
         self._last_result = None
 
+    def __repr__(self):
+        return "<{}.{} {}/{}>".format(
+            self.__class__.__module__,
+            self.__class__.__name__,
+            self.namespace,
+            self.workspace
+        )
+
     # =============
     # Operator Cache Internals
     # =============
