@@ -1234,7 +1234,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             )
         if entity is None:
             entity = config
-            config = self.fetch_config_name(cnamespace)
+            config = cnamespace
         else:
             config = self.fetch_config_name(cnamespace, config)
 
