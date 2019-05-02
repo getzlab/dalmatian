@@ -23,6 +23,8 @@ running lapdog jobs into dalmatian
 - [x] Add firecloud timeout shim
 - [ ] Add background synchronizer
 - [ ] Robust preflight for firecloud submissions
+- [ ] Add back array translation for uploads (upload first then update using a no-op)
+- [ ] Check handling on Series/Index=False
 
 ## CLI
 - [ ] Add lapdog CLI for uploads

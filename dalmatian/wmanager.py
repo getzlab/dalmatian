@@ -865,7 +865,6 @@ class WorkspaceManager(LegacyWorkspaceManager):
     attributes.setter(update_attributes)
 
     configs = property(list_configs)
-
     configurations = configs
 
     # =============
