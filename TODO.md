@@ -38,7 +38,7 @@ running lapdog jobs into dalmatian
 
 ## Other
 - [x] Migrate GetBlob API
-- [ ] Integrate ACL API
+- [x] Integrate ACL API
 - [x] Properties!
 
 # Writeup
@@ -79,11 +79,15 @@ argument combinations:
 * `dalmatian.WorkspaceManager.evaluate_expression`: Can be used to evaluate workspace
 expressions (such as "this.samples.sample_id" or "workspace.gtf") within the context
 of the workspace. Works in both online and offline modes
+* `dalmatian.WorkspaceManager.update_acl`: new function to update user permissions
+on the workspace. Takes an argument of `{"user_email": "permissions"}`, where _permissions_ can be `"OWNER"`, `"WRITER"`, `"READER"`, or `"NO ACCESS"`
 * Several methods of `dalmatian.WorkspaceManager` are now also available as **Properties**:
     * `WorkspaceManager.firecloud_workspace` : (Readonly, New method) Returns FireCloud's
     workspace-level metadata including owners, bucket_id, and attributes
     * `WorkspaceManager.entity_types` : (Readonly, New method) Returns the list
     of entity types in the workspace, and some information about each type
+    * `WorkspaceManager.acl` : (Readonly, New method) Returns the current permissions
+    configuration of the workspace
     * `WorkspaceManager.bucket_id` : (Readonly) Calls `WorkspaceManager.get_bucket_id()`
     * `WorkspaceManager.samples` : (Readonly) Calls `WorkspaceManager.get_samples()`
     * `WorkspaceManager.sample_sets` : (Readonly) Calls `WorkspaceManager.get_sample_sets()`

@@ -1154,3 +1154,42 @@ class WorkspaceManager(LegacyWorkspaceManager):
             expression,
             use_callcache
         )
+
+    @property
+    def acl(self):
+        """
+        Returns the current FireCloud ACL settings for the workspace
+        """
+        with self.timeout(DEFAULT_LONG_TIMEOUT):
+            result = self.tentative_json(
+                firecloud.api.get_workspace_acl(self.namespace, self.workspace)
+            )
+            if result is not None:
+                return result['acl']
+        raise APIException("Failed to get the workspace ACL")
+
+    def update_acl(self, acl):
+        """
+        Sets the ACL. Provide a dictionary of email -> access level
+        ex: {email: "WRITER"}
+        """
+        with self.timeout(DEFAULT_LONG_TIMEOUT):
+            result = self.tentative_json(
+                firecloud.api.update_workspace_acl(
+                    self.namespace,
+                    self.workspace,
+                    [
+                        {
+                            'email': email,
+                            'accessLevel': (
+                                level['accessLevel'] if isinstance(level, dict)
+                                else level
+                            ).upper()
+                        }
+                        for email, level in acl.items()
+                    ]
+                )
+            )
+            if result is not None:
+                return result
+        raise APIException("Failed to update the workspace ACL")
