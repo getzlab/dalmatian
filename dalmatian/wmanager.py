@@ -144,7 +144,8 @@ def _read_from_cache(key, message=None):
             else:
                 _key = key
             if self.live:
-                result = func(self, *args, **kwargs)
+                with self.timeout(_key):
+                    result = func(self, *args, **kwargs)
                 if result is not None:
                     self.cache[_key] = result
             if _key in self.cache and self.cache[_key] is not None:
@@ -436,12 +437,11 @@ class WorkspaceManager(LegacyWorkspaceManager):
         """
         Property: Fetches Firecloud Workspace Metadata
         """
-        with self.timeout('workspace'):
-            # Try to fetch workspace metadata from firecloud
-            return self.tentative_json(firecloud.api.get_workspace(
-                self.namespace,
-                self.workspace
-            ))
+        # Try to fetch workspace metadata from firecloud
+        return self.tentative_json(firecloud.api.get_workspace(
+            self.namespace,
+            self.workspace
+        ))
 
     def get_bucket_id(self):
         """Get the GCS bucket ID associated with the workspace"""
@@ -454,11 +454,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
     @_read_from_cache('configs')
     def list_configs(self):
         """List configurations in workspace"""
-        with self.timeout('configs'):
-            return self.tentative_json(firecloud.api.list_workspace_configs(
-                self.namespace,
-                self.workspace
-            ))
+        return self.tentative_json(firecloud.api.list_workspace_configs(
+            self.namespace,
+            self.workspace
+        ))
 
     @_synchronized
     @_read_from_cache(lambda self, cnamespace, config=None: 'config:{}'.format(self.fetch_config_name(cnamespace, config)))
@@ -472,14 +471,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
         """
         canonical = self.fetch_config_name(cnamespace, config)
         cnamespace, config = canonical.split('/')
-        key = 'config:{}'.format(canonical)
-        with self.timeout(key):
-            return self.tentative_json(firecloud.api.get_workspace_config(
-                self.namespace,
-                self.workspace,
-                cnamespace,
-                config
-            ))
+        return self.tentative_json(firecloud.api.get_workspace_config(
+            self.namespace,
+            self.workspace,
+            cnamespace,
+            config
+        ))
 
     get_configuration = get_config
 
@@ -575,22 +572,27 @@ class WorkspaceManager(LegacyWorkspaceManager):
     @_synchronized
     @_read_from_cache('entity_types')
     def entity_types(self):
-        with self.timeout('entity_types'):
-            return self.tentative_json(
-                # Because stupid name mangling
-                getattr(firecloud.api, '__get')('/api/workspaces/{}/{}/entities'.format(
-                    self.namespace,
-                    self.workspace
-                ))
-            )
+        """
+        Returns the different entity types present in the workspace
+        Includes the count and column names of the entities
+        """
+        return self.tentative_json(
+            # Because stupid name mangling
+            getattr(firecloud.api, '__get')('/api/workspaces/{}/{}/entities'.format(
+                self.namespace,
+                self.workspace
+            ))
+        )
 
     @_synchronized
     @_read_from_cache(lambda self, etype, page_size=1000: "entities:{}".format(etype))
     def get_entities(self, etype, page_size=1000):
-        """Paginated query replacing get_entities_tsv()"""
-        key = "entities:{}".format(etype)
-        with self.timeout(key):
-            return super().get_entities(etype, page_size).copy()
+        """
+        Paginated query replacing get_entities_tsv()
+        """
+        # This method override is just to gain the operator cache's
+        # synchonization and cacheing
+        return super().get_entities(etype, page_size).copy()
 
     @_synchronized
     def upload_entities(self, etype, df, index=True):
