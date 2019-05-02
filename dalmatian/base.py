@@ -84,20 +84,16 @@ class LegacyWorkspaceManager(object):
             if r.status_code==201:
                 print('Workspace {}/{} successfully created.'.format(self.namespace, self.workspace))
                 return True
-            elif r.status_code==409:
-                print(r.json()['message'])
             else:
-                print(r.text)
+                raise APIException("Failed to create Workspace", r)
         else:  # clone workspace
             r = firecloud.api.clone_workspace(wm.namespace, wm.workspace, self.namespace, self.workspace)
             if r.status_code == 201:
                 print('Workspace {}/{} successfully cloned from {}/{}.'.format(
                     self.namespace, self.workspace, wm.namespace, wm.workspace))
                 return True
-            elif r.status_code >= 400:
-                raise APIException(r)
             else:
-                print(r.text)
+                raise APIException("Failed to clone Workspace", r)
         return False
 
 
@@ -107,17 +103,15 @@ class LegacyWorkspaceManager(object):
         if r.status_code == 202:
             print('Workspace {}/{} successfully deleted.'.format(self.namespace, self.workspace))
             print('  * '+r.json()['message'])
-        elif r.status_code >= 400:
-            raise APIException(r)
         else:
-            print(r.text)
+            raise APIException("Failed to delete workspace", r)
 
 
     def get_bucket_id(self):
         """Get the GCS bucket ID associated with the workspace"""
         r = firecloud.api.get_workspace(self.namespace, self.workspace)
         if r.status_code != 200:
-            raise APIException(r)
+            raise APIException("Unable to get workspace metadata", r)
         r = r.json()
         bucket_id = r['workspace']['bucketName']
         return bucket_id
@@ -774,11 +768,8 @@ class LegacyWorkspaceManager(object):
             cnamespace, cname, c['snapshotId'], cnamespace, cname)
         if r.status_code == 201:
             print('Successfully imported configuration "{}/{}" (SnapshotId {})'.format(cnamespace, cname, c['snapshotId']))
-        elif r.status_code >= 400:
-            raise APIException(r)
         else:
-            print(r.text)
-
+            raise APIException(r)
 
     def update_config(self, json_body):
         """

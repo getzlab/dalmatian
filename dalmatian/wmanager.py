@@ -814,7 +814,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.pending_operations.append((
                 'entity_types',
                 None,
-                self._entities_live_update()
+                self._entities_live_update
             ))
         else:
             try:
@@ -874,7 +874,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.pending_operations.append((
                 'entity_types',
                 None,
-                lambda x=None:self._entities_live_update
+                self._entities_live_update
             ))
         else:
             try:
@@ -939,6 +939,51 @@ class WorkspaceManager(LegacyWorkspaceManager):
             except AssertionError:
                 pass
         return attr_dict
+
+    @_synchronized
+    def upload_participants(self, participant_ids):
+        """Upload a list of participants IDs"""
+        # First update cache
+        offline_df = pd.DataFrame(index=np.unique(participant_ids))
+        offline_df.index.name = 'participant_id'
+        key = 'entities:participant'
+        if key not in self.cache or self.cache[key] is None:
+            self.cache[key] = offline_df
+        else:
+            self.cache[key] = self.cache[key].append(
+                offline_df.loc[[k for k in offline_df.index if k not in self.cache[key].index]]
+            )
+            self.cache[key].update(offline_df)
+        self.dirty.add(key)
+        if 'entity_types' not in self.cache:
+            self.cache['entity_types'] = {}
+        self.cache['entity_types'][etype] = {
+            'attributeNames': [*self.cache[key].columns],
+            'count': len(self.cache[key]),
+            'idName': etype+'_id'
+        }
+        self.dirty.add('entity_types')
+        if self.live:
+            try:
+                super().upload_participants(participant_ids)
+            except APIException:
+                self.go_offline()
+        if not self.live:
+            self.pending_operations.append((
+                key,
+                partial(super().upload_participants, participant_ids),
+                partial(self._get_entities_internal, 'participant')
+            ))
+            self.pending_operations.append((
+                'entity_types',
+                None,
+                self._entities_live_update
+            ))
+        else:
+            try:
+                self._get_entities_internal('participant')
+            except:
+                pass
 
     # =============
     # Properties
@@ -1286,7 +1331,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.pending_operations.append((
                 'entity_types',
                 None,
-                lambda x=None:self._entities_live_update
+                self._entities_live_update
             ))
         else:
             try:

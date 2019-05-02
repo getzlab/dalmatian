@@ -19,7 +19,7 @@ running lapdog jobs into dalmatian
   * Actually remove the array translator from `upload_*` methods
   * Drop wdl from cache. No reason to have this without running jobs offline
 - [x] Integrate expression evaluator
-- [ ] Add additional operator cache points
+- [x] Add additional operator cache points
 - [x] Add firecloud timeout shim
 - [x] Add background synchronizer
   * WONTFIX: I think the background synchronizer added more uncertainty and problems
@@ -145,3 +145,4 @@ in the workspace cache
     * `(config_name)` (Only works if the config name is unique within the workspace)
     * `("config_namespace/config_name")`
     * `({"namespace": "config_namespace", "name": "config_name"})` (Format returned by `list_configs`)
+* `dalmatian.WorkspaceManager.update_participant_entities` now makes up to 5 attempts
