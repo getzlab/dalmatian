@@ -139,18 +139,23 @@ def _read_from_cache(key, message=None):
 
         @wraps(func)
         def call(self, *args, **kwargs):
+            # First, if the key is callable, use it to get a string key
             if callable(key):
                 _key = key(self, *args, **kwargs)
             else:
                 _key = key
+            # Next, if the workspace is live, attempt a live update
             if self.live:
+                # Call with timeout
+                # Remember, a request timeout will just switch us to offline mode
                 with self.timeout(_key):
                     result = func(self, *args, **kwargs)
-                if result is not None:
-                    self.cache[_key] = result
+                    if result is not None:
+                        self.cache[_key] = result
+            # Return the cached value, if present
             if _key in self.cache and self.cache[_key] is not None:
                 return self.cache[_key]
-            self.fail(message)
+            self.fail(message) # Fail otherwise
 
         return call
 
