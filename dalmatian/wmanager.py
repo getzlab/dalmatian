@@ -5,7 +5,7 @@ import subprocess
 import os
 import sys
 import io
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from functools import wraps, partial
 import time
 import tempfile
@@ -19,6 +19,7 @@ from datetime import datetime
 from threading import RLock, local
 import contextlib
 from agutil import status_bar
+from agutil.parallel import parallelize
 from google.cloud import storage
 import crayons
 import warnings
@@ -107,6 +108,23 @@ class WorkspaceCollection(object):
                 df['workspace'] = i.workspace
             dfs.append(df)
         return pd.concat(dfs, axis=0)
+
+# =============
+# Preflight helper classes
+# =============
+
+PreflightFailure = namedtuple("PreflightFailure", ["result", "reason"])
+PreflightSuccess = namedtuple(
+    "PreflightSuccess",
+    [
+        "result",
+        "config",
+        "entity",
+        "etype",
+        "workflow_entities",
+        "invalid_inputs"
+    ]
+)
 
 # =============
 # Operator Cache Helper Decorators
@@ -430,6 +448,19 @@ class WorkspaceManager(LegacyWorkspaceManager):
 
     def _get_entities_internal(self, etype):
         return getattr(self, 'get_{}s'.format(etype))()
+
+    @_synchronized
+    @_read_from_cache(lambda self, namespace, name=None: 'valid:config:{}'.format(self.fetch_config_name(namespace, name)))
+    def _validate_config_internal(self, namespace, name=None):
+        """
+        Internal component for config validation
+        """
+        return self.tentative_json(firecloud.api.validate_config(
+            self.namespace,
+            self.workspace,
+            namespace,
+            name
+        ))
 
     # =============
     # Operator Cache Method Overrides
@@ -992,3 +1023,114 @@ class WorkspaceManager(LegacyWorkspaceManager):
             item for item in evaluator(etype, entity, expression)
             if isinstance(item, str) or not np.isnan(item)
         ]
+
+    def validate_config(self, namespace, name=None):
+        """
+        validates a method configuration.
+        The combination and values of namespace and name can be any
+        input accepted by fetch_config_name
+
+        This method ignores APIExceptions. It is not designed to cause failures,
+        so you should not rely on it to check that a configuration actually exists.
+
+        In the event of a failure or cache miss, this just returns an empty validation
+        object, indicating a valid configuration
+        """
+        try:
+            return self._validate_config_internal(namespace, name)
+        except APIException:
+            print(
+                crayons.red("WARNING:", bold=False),
+                "This operator was unable to validate the config",
+                file=sys.stderr
+            )
+            print("Assuming valid inputs and returning blank validation object")
+            return {
+                'invalidInputs': {},
+                'missingInputs': []
+            }
+
+    def preflight(self, config_name, entity, expression=None, etype=None):
+        """
+        Verifies submission configuration.
+        This is just a quick check that the entity type, name, and expression map to
+        one or more valid entities of the same type as the config's rootEntityType
+
+        For a robust check at the workflow input level, set robust_preflight=True on create_submission
+
+        Returns a namedtuple.
+        If tuple.result is False, tuple.reason will explain why preflight failed
+        If tuple.result is True, you can access the following attributes:
+        * (.config): The method configuration object
+        * (.entity): The submission entity
+        * (.etype): The submission entity type (inferred from the configuration, if not provided)
+        * (.workflow_entities): The list of entities for each workflow (from evaluating the expression, if provided)
+        * (.invalid): A dictonary of input-name : error, for any invalid inputs in the configuration
+        """
+        config = self.get_config(config_name)
+        if (expression is not None) ^ (etype is not None and etype != config['rootEntityType']):
+            return PreflightFailure(False, "expression and etype must BOTH be None or a string value")
+        if etype is None:
+            etype = config['rootEntityType']
+        entities = self._get_entities_internal(etype)
+        if entity not in entities.index:
+            return PreflightFailure(
+                False,
+                "No such %s '%s' in this workspace. Check your entity and entity type" % (
+                    etype,
+                    entity
+                )
+            )
+
+        workflow_entities = self.evaluate_expression(
+            etype,
+            entity,
+            (expression if expression is not None else 'this')+'.%s_id' % config['rootEntityType']
+        )
+        if isinstance(workflow_entities, dict) and 'statusCode' in workflow_entities and workflow_entities['statusCode'] >= 400:
+            return PreflightFailure(False, workflow_entities['message'] if 'message' in workflow_entities else repr(workflow_entities))
+        elif not len(workflow_entities):
+            return PreflightFailure(False, "Expression evaluates to 0 entities")
+
+        template = config['inputs']
+
+        invalid_inputs = self.validate_config(
+            config['namespace'],
+            config['name']
+        )
+        invalid_inputs = {**invalid_inputs['invalidInputs'], **{k:'N/A' for k in invalid_inputs['missingInputs']}}
+
+        return PreflightSuccess(True, config, entity, etype, workflow_entities, invalid_inputs)
+
+
+    def create_submission(self, config, entity, etype=None, expression=None, use_callcache=True):
+        """
+        Validates config parameters then creates a submission in Firecloud.
+        Returns the submission id.
+        This function does not use the Lapdog Engine, and instead submits a job
+        through the FireCloud Rawls API. Use `WorkspaceManager.execute` to run
+        jobs through the Lapdog Engine
+        """
+        if not self.live:
+            warnings.warn(
+                "WorkspaceManager {}/{} is currently offline."
+                " Preflight will take place offline, but submission will still connect to Firecloud".format(
+                    self.namespace,
+                    self.workspace
+                )
+            )
+        preflight = self.preflight(config, entity, expression, etype)
+        if not preflight.result:
+            raise ValueError(preflight.reason)
+
+        if len(preflight.invalid_inputs):
+            raise ValueError("The following inputs are invalid on this configuation: %s" % repr(list(preflight.invalid_inputs)))
+
+        return super().create_submission(
+            preflight.config['namespace'],
+            preflight.config['name'],
+            preflight.entity,
+            preflight.etype,
+            expression,
+            use_callcache
+        )

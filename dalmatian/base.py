@@ -1389,8 +1389,8 @@ class LegacyWorkspaceManager(object):
         r = firecloud.api.create_submission(self.namespace, self.workspace,
             cnamespace, config, entity, etype, expression=expression, use_callcache=use_callcache)
         if r.status_code == 201:
-            print('Successfully created submission {}.'.format(r.json()['submissionId']))
-        elif r.status_code >= 400:
-            raise APIException(r)
+            submission_id = r.json()['submissionId']
+            print('Successfully created submission {}.'.format(submission_id))
+            return submission_id
         else:
-            print(r.text)
+            raise APIException(r)

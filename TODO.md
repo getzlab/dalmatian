@@ -22,7 +22,7 @@ running lapdog jobs into dalmatian
 - [ ] Add additional operator cache points
 - [x] Add firecloud timeout shim
 - [ ] Add background synchronizer
-- [ ] Robust preflight for firecloud submissions
+- [x] Robust preflight for firecloud submissions
 - [ ] Add back array translation for uploads (upload first then update using a no-op)
 - [ ] Check handling on Series/Index=False
 
