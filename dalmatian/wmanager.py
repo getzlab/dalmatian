@@ -131,11 +131,15 @@ PreflightSuccess = namedtuple(
 # =============
 
 def _synchronized(func):
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            with self.lock:
-                return func(self, *args, **kwargs)
-        return wrapper
+    """
+    Synchronizes access to the function using the instance's lock.
+    Use if the function touches the operator cache
+    """
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with self.lock:
+            return func(self, *args, **kwargs)
+    return wrapper
 
 def _read_from_cache(key, message=None):
     """
@@ -151,6 +155,10 @@ def _read_from_cache(key, message=None):
     for a live update and removes the boilerplate of updating and reading from cache
 
     If the key is callable, call it on all the provided args and kwargs to generate a key
+
+    Use if your function is a relatively straightforward getter. Just decorate with
+    this and _synchronized, and then build your function to fetch a result from firecloud.
+    Combine with tentative_json in your function for best results
     """
 
     def decorator(func):
@@ -377,7 +385,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
     @_synchronized
     def _entities_live_update(self):
         """
-        Internal Use. Property: Fetches the list of entity types, but forces
+        Internal Use. Fetches the list of entity types, but forces
         the workspace to go online
         """
         state = self.live
@@ -976,7 +984,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         Use in advance of switching offline so that the WorkspaceManager can run in
         offline mode without issue.
 
-        Call `WorkspaceManager.operator.go_offline()` after this function to switch
+        Call `WorkspaceManager.go_offline()` after this function to switch
         the workspace into offline mode
         """
         if self.live:
@@ -990,6 +998,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
 
     @_synchronized
     def evaluate_expression(self, etype, entity, expression):
+        """
+        Evaluate entity expressions in the context of this workspace
+        IE: "this.samples.sample_id" or "workspace.gtf"
+        This function works in both online and offline modes, but the offline
+        mode requires that the cache be almost completely populated
+        """
         if self.live:
             with self.timeout(DEFAULT_LONG_TIMEOUT):
                 result = self.tentative_json(
@@ -1055,8 +1069,6 @@ class WorkspaceManager(LegacyWorkspaceManager):
         Verifies submission configuration.
         This is just a quick check that the entity type, name, and expression map to
         one or more valid entities of the same type as the config's rootEntityType
-
-        For a robust check at the workflow input level, set robust_preflight=True on create_submission
 
         Returns a namedtuple.
         If tuple.result is False, tuple.reason will explain why preflight failed
