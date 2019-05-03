@@ -33,6 +33,7 @@ from .schema import Evaluator
 
 timeout_state = local()
 
+# For legacy methods or non-cached operations, the timeout will be None (infinite)
 DEFAULT_LONG_TIMEOUT = 30 # Seconds to wait if a value is not cached
 DEFAULT_SHORT_TIMEOUT = 5 # Seconds to wait if a value is already cached
 
@@ -533,8 +534,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
         response = firecloud.api.get_workspace_config(
             self.namespace,
             self.workspace,
-            cnamespace,
-            config
+            namespace,
+            name
         )
         if response.status_code == 404:
             raise ConfigNotFound("No such config {}/{} in this workspace".format(namespace, name))
@@ -1231,6 +1232,11 @@ class WorkspaceManager(LegacyWorkspaceManager):
         This function does not use the Lapdog Engine, and instead submits a job
         through the FireCloud Rawls API. Use `WorkspaceManager.execute` to run
         jobs through the Lapdog Engine
+        Accepts the following argument types for config:
+        1) config = {config JSON object} (will be uploaded if not present on the workspace)
+        2) config = "config namespace"
+        3) config = "config name" (Only if name is unique in the workspace)
+        4) config = "config namespace/config name"
         """
         if not self.live:
             warnings.warn(

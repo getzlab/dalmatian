@@ -323,17 +323,20 @@ def fetch_method(reference, name=None, version=None, *args, decode_only=False):
         if len(data) == 1:
             # Just a name
             methods = list_methods().query('name == "{}"'.format(data[0]))
-            methods = methods.loc[methods.groupby('namespace').idxmax('snapshotId').snapshotId]
+            try:
+                methods = methods.loc[methods.groupby('namespace').idxmax('snapshotId').snapshotId]
+            except AttributeError as e:
+                raise MethodNotFound("No method by name '{}'".format(data[0])) from e
             if len(methods) > 1:
                 raise MethodNotUnique("Found more than one method with name '{}'. Must provide a namespace".format(data[0]))
             if len(methods) == 0:
                 raise MethodNotFound("No method by name '{}'".format(data[0]))
             methods = methods.iloc[0]
-            namespace = methods.namespace
-            name = methods.name
+            namespace = methods['namespace']
+            name = methods['name']
             # Even though a version was not provided by the user
             # we found the latest snapshot as a byproduct of the search
-            version = methods.snapshotId
+            version = methods['snapshotId']
         elif len(data) >= 2:
             # namespace / name
             namespace = data[0]
@@ -437,17 +440,20 @@ def fetch_config(reference, name=None, version=None, *args, decode_only=False):
         if len(data) == 1:
             # Just a name
             configs = list_configs().query('name == "{}"'.format(data[0]))
-            configs = configs.loc[configs.groupby('namespace').idxmax('snapshotId').snapshotId]
+            try:
+                configs = configs.loc[configs.groupby('namespace').idxmax('snapshotId').snapshotId]
+            except AttributeError as e:
+                raise ConfigNotFound("No config by name '{}'".format(data[0])) from e
             if len(configs) > 1:
                 raise ConfigNotUnique("Found more than one config with name '{}'. Must provide a namespace".format(data[0]))
             if len(configs) == 0:
                 raise ConfigNotFound("No config by name '{}'".format(data[0]))
             configs = configs.iloc[0]
-            namespace = configs.namespace
-            name = configs.name
+            namespace = configs['namespace']
+            name = configs['name']
             # Even though a version was not provided by the user
             # we found the latest snapshot as a byproduct of the search
-            version = configs.snapshotId
+            version = configs['snapshotId']
         elif len(data) >= 2:
             # namespace / name
             namespace = data[0]
@@ -464,7 +470,7 @@ def fetch_config(reference, name=None, version=None, *args, decode_only=False):
         version = _get_config_version_internal(namespace, name)
     response = firecloud.api.get_repository_config(namespace, name, version)
     if response.status_code == 404:
-        raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
+        raise ConfigNotFound("No such method {}/{}/{}".format(namespace, name, version))
     elif response.status_code >= 400:
         raise APIException("Failed to get method", response)
     return response.json()
