@@ -573,7 +573,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.workspace
         ))
 
-    def get_config(self, reference, name=None, *, decode_only=False):
+    def get_config(self, reference, name=None, *args, decode_only=False):
         """
         Fetches a configuration by the provided reference
         Returns the configuration JSON object
@@ -583,6 +583,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
         3) reference = "config name"
         4) reference = "config namespace/config name"
         """
+        if len(args):
+            raise TypeError("decode_only is a keyword-only argument")
         if isinstance(reference, dict):
             namespace = reference['namespace']
             name = reference['name']

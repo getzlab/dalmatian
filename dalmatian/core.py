@@ -291,7 +291,7 @@ def list_workspaces():
     else:
         print(r.text)
 
-def fetch_method(reference, name=None, version=None, *, decode_only=False):
+def fetch_method(reference, name=None, version=None, *args, decode_only=False):
     """
     Fetches a single method JSON object given a variety of possible inputs:
     1) reference = {method configuration JSON}
@@ -300,6 +300,8 @@ def fetch_method(reference, name=None, version=None, *, decode_only=False):
     4) reference = "method namespace/method name"
     5) reference = "method namespace/method name/method version"
     """
+    if len(args):
+        raise TypeError("decode_only is a keyword-only argument")
     if isinstance(reference, dict):
         # it's a config or method object
         if "method" in reference and "snapshotId" in reference:
@@ -411,7 +413,7 @@ def get_method_version(namespace, name=None):
     return _get_method_version_internal(namespace, name)
 
 
-def fetch_config(reference, name=None, version=None, *, decode_only=False):
+def fetch_config(reference, name=None, version=None, *args, decode_only=False):
     """
     fetches a config json given a variety of reference formats
     Note: This method only fetches public configurations. You must use a workspacemanager
@@ -422,6 +424,8 @@ def fetch_config(reference, name=None, version=None, *, decode_only=False):
     4) reference = "config namespace/config name"
     5) reference = "config namespace/config name/config version"
     """
+    if len(args):
+        raise TypeError("decode_only is a keyword-only argument")
     if isinstance(reference, dict):
         namespace = reference['namespace']
         name = reference['name']
@@ -553,7 +557,7 @@ def get_config_template(namespace, method=None, version=None):
     return r.json()
 
 
-def autofill_config_template(namespace, method=None, *, version=None, workflow_inputs=None):
+def autofill_config_template(namespace, method=None, *args, version=None, workflow_inputs=None):
     """
     Fill configuration template for workflow based on dependent tasks
     Namespace and method arguments can be in any of the following formats
@@ -564,6 +568,8 @@ def autofill_config_template(namespace, method=None, *, version=None, workflow_i
     5) namespace = "method namespace/method name/method version"
     workflow_inputs must always be a keyword argument
     """
+    if len(args):
+        raise TypeError("version and workflow_inputs are keyword-only arguments")
     if workflow_inputs is None:
         raise TypeError("workflow_inputs is required but must be passed as a keyword argument")
     method = fetch_method(namespace, method, version)
@@ -685,12 +691,14 @@ def compare_wdl(mnamespace, mname, wdl_path):
     print(d.stdout.decode())
 
 
-def redact_method(method_namespace, method_name=None, *, mode='outdated'):
+def redact_method(method_namespace, method_name=None, *args, mode='outdated'):
     """
     Redact method in repository
 
     mode: 'outdated', 'latest', 'all'
     """
+    if len(args):
+        raise TypeError("mode is a keyword-only argument")
     assert mode in ['outdated', 'latest', 'all']
     # just decode user inputs
     method_namespace, method_name, version = fetch_method(method_namespace, method_name, decode_only=True)
