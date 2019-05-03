@@ -156,3 +156,46 @@ Remediate this issue by defining an `env` variable for gsutil python
 # (assuming of course 2.7.12 is installed)
 export CLOUDSDK_PYTHON=/usr/local/var/pyenv/versions/2.7.12/bin/python
 ```
+
+
+# Features in development
+
+## Breaking Changes
+* The _workflow\_inputs_ argument to `dalmatian.autofill_config_template` is now
+**kewyord-only**. It is still required but must be provided as a keyword argument
+* The _mode_ argument to `dalmatian.redact_method` is now **keyword-only**. It is
+still required but must be provided as a keyword argument
+
+## New Features
+* `dalmatian.fetch_method`: new function to handle the variety of acceptable argument
+types and return a method JSON dictionary
+
+### Method Referencing
+
+**Most** methods (except those listed at the bottom of this section) which operate
+on methods, can now take arguments in a variety of formats.
+In general, you can reference a method with:
+* A method configuration JSON dictionary
+* A method JSON dictionary
+* The namespace and name as two separate arguments (Legacy syntax)
+    * In functions which take a version, you may provide it as an optional 3rd argument
+* A string in the format "namespace/name"
+* A string in the format "namespace/name/version"
+
+Unchanged functions:
+* `dalmatian.compare_wdls` was left unchanged
+* `dalmatian.compare_wdl` was left unchanged
+* `dalmatian.update_method` was left unchanged
+
+## Other Changes
+* The _name_ argument on `dalmatian.get_method` is now optional
+* The _name_ argument on `dalmatian.get_method_version` is now optional
+* The _name_ and _version_ arguments on `dalmatian.get_config_template` are now optional
+* Changed the call syntax for `dalmatian.autofill_config_template`:
+    * _method_ argument is now optional
+    * Added optional **keyword-only** argument _version_
+    * **Breaking Change:** _workflow\_inputs_ is now **keyword-only**, but still required
+* The _method\_name_ argument to `dalmatian.get_wdl` is now optional
+* Changed the call syntax for `dalmatian.redact_method`:
+    * _method\_name_ argument is now optional
+    * **Breaking Change:** _mode_ is now **keword-only** but still required

@@ -1226,6 +1226,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     self.workspace
                 )
             )
+        if isinstance(config, dict):
+            # Auto upload a method configuration if it doesn't exist
+            try:
+                config = self.fetch_config_name(config)
+            except ConfigNotFound:
+                self.update_config(config)
         preflight = self.preflight(config, entity, expression, etype)
         if not preflight.result:
             raise ValueError(preflight.reason)
