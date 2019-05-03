@@ -468,7 +468,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         return getattr(self, 'get_{}s'.format(etype))()
 
     @_synchronized
-    @_read_from_cache(lambda self, namespace, name=None: 'valid:config:{}'.format(self.fetch_config_name(namespace, name)))
+    @_read_from_cache(lambda self, namespace, name=None: 'valid:config:{}'.format('/'.join(self.get_config(namespace, name, decode_only=True))))
     def _validate_config_internal(self, namespace, name=None):
         """
         Internal component for config validation
@@ -520,6 +520,26 @@ class WorkspaceManager(LegacyWorkspaceManager):
 
         print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
 
+    @_synchronized
+    @_read_from_cache(lambda self, namespace, name: 'config:{}/{}'.format(namespace, name))
+    def _get_config_internal(self, namespace, name):
+        """
+        Get workspace configuration JSON
+        Accepts the following formats:
+        1) cnamespace = namespace; config = name
+        2) cnamespace = "namespace/name"; config = None
+        3) cnamespace = name; config = None
+        """
+        response = firecloud.api.get_workspace_config(
+            self.namespace,
+            self.workspace,
+            cnamespace,
+            config
+        )
+        if response.status_code == 404:
+            raise ConfigNotFound("No such config {}/{} in this workspace".format(namespace, name))
+        return self.tentative_json(response)
+
     # =============
     # Operator Cache Method Overrides
     # =============
@@ -553,24 +573,42 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.workspace
         ))
 
-    @_synchronized
-    @_read_from_cache(lambda self, cnamespace, config=None: 'config:{}'.format(self.fetch_config_name(cnamespace, config)))
-    def get_config(self, cnamespace, config=None):
+    def get_config(self, reference, name=None, *, decode_only=False):
         """
-        Get workspace configuration JSON
-        Accepts the following formats:
-        1) cnamespace = namespace; config = name
-        2) cnamespace = "namespace/name"; config = None
-        3) cnamespace = name; config = None
+        Fetches a configuration by the provided reference
+        Returns the configuration JSON object
+        Accepts the following argument combinations
+        1) reference = {method configuration JSON}
+        2) reference = "config namespace", name = "config name"
+        3) reference = "config name"
+        4) reference = "config namespace/config name"
         """
-        canonical = self.fetch_config_name(cnamespace, config)
-        cnamespace, config = canonical.split('/')
-        return self.tentative_json(firecloud.api.get_workspace_config(
-            self.namespace,
-            self.workspace,
-            cnamespace,
-            config
-        ))
+        if isinstance(reference, dict):
+            namespace = reference['namespace']
+            name = reference['name']
+            if 'inputs' in reference and 'outputs' in reference and not decode_only:
+                return reference
+        elif name is None:
+            data = reference.split('/')
+            if len(data) == 2:
+                namespace = data[0]
+                name = data[1]
+            elif len(data) == 1:
+                candidates = [
+                    cfg for cfg in self.configs
+                    if cfg['name'] == data[0]
+                ]
+                if len(candidates) == 0:
+                    raise ConfigNotFound("No such config {} in this workspace".format(reference))
+                if len(candidates) > 1:
+                    raise ConfigNotUnique("Multiple configs by the name {} in this workspace".format(reference))
+                namespace = candidates[0]['namespace']
+                name = candidates[0]['name']
+        else:
+            namespace = reference
+        if decode_only:
+            return namespace, name
+        return self._get_config_internal(namespace, name)
 
     get_configuration = get_config
 
@@ -1047,32 +1085,6 @@ class WorkspaceManager(LegacyWorkspaceManager):
         # Now upload as normal
         return staged_df
 
-    def fetch_config_name(self, config_slug, config_name=None):
-        """
-        Fetches a configuration by the provided slug (method_config_namespace/method_config_name).
-        If the slug is just the config name, this returns a config
-        with a matching name IFF the name is unique. If another config
-        exists with the same name, this will fail.
-        If the slug is a full slug (namespace/name) this will always return
-        a matching config (slug uniqueness is enforced by firecloud)
-        """
-        if config_name is not None:
-            config_slug = '{}/{}'.format(config_slug, config_name)
-        if isinstance(config_slug, dict):
-            config_slug = '{}/{}'.format(config_slug['namespace'], config_slug['name'])
-        configs = self.list_configs()
-        candidates = [] # For configs just matching name
-        for config in configs:
-            if config_slug == '%s/%s' % (config['namespace'], config['name']):
-                return '{}/{}'.format(config['namespace'], config['name'])
-            elif config_slug == config['name']:
-                candidates.append(config)
-        if len(candidates) == 1:
-            return '{}/{}'.format(candidates[0]['namespace'], candidates[0]['name'])
-        elif len(candidates) > 1:
-            raise ConfigNotUnique('%d configs matching name "%s". Use a full config slug' % (len(candidates), config_slug))
-        raise ConfigNotFound('No such config "%s"' % config_slug)
-
     def populate_cache(self):
         """
         Preloads all data from the FireCloud workspace into the in-memory cache.
@@ -1137,7 +1149,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         """
         validates a method configuration.
         The combination and values of namespace and name can be any
-        input accepted by fetch_config_name
+        input accepted by get_config
 
         This method ignores APIExceptions. It is not designed to cause failures,
         so you should not rely on it to check that a configuration actually exists.
@@ -1229,7 +1241,17 @@ class WorkspaceManager(LegacyWorkspaceManager):
         if isinstance(config, dict):
             # Auto upload a method configuration if it doesn't exist
             try:
-                config = self.fetch_config_name(config)
+                # Bonus: Quick pre-check that the config exists
+                # If we intercept a ConfigNotFound, then upload the new configuration
+                cfg = self.get_config(config['namespace'], config['name'])
+                if 'inputs' in config and 'outputs' in config != cfg:
+                    # Extra bonus: Maybe the full JSON we're holding is different than
+                    # the config retrieved, meaning they are different versions
+                    # It's best that we halt the procedure in that case, because we can't
+                    # tell which should supercede which
+                    print("User provided a full method configuration, which did not match the configuration already present on the workspace", file=sys.stderr)
+                    print("Either upload the provided configuration, or use a different reference type to fetch the online version", file=sys.stderr)
+                    raise ConfigNotUnique("Provided configuration did not match live version {}/{}".format(cfg['namespace'], cfg['name']))
             except ConfigNotFound:
                 self.update_config(config)
         preflight = self.preflight(config, entity, expression, etype)
@@ -1383,3 +1405,60 @@ class WorkspaceManager(LegacyWorkspaceManager):
             if result is not None:
                 return result
         raise APIException("Failed to update the workspace ACL")
+
+    def patch_attributes(self, cnamespace, configuration=None, *args, dry_run=False, entity='sample'):
+        """
+        Patch attributes for all samples/tasks that run successfully but were not written to database.
+        This includes outputs from successful tasks in workflows that failed.
+        Takes cnamespace and configuration arguments in the following formats:
+        1) cnamespace = {config JSON object} (must be present online)
+        2) cnamespace = "config namespace", configuration = "config name"
+        3) cnamespace = "config name"
+        4) cnamespace = "config namespace/config name"
+        """
+        if len(args):
+            raise TypeError("dry_run and entity arguments are keyword-only")
+        if isinstance(cnamespace, dict):
+            # given a dictionary, we just need to check that it's been uploaded, or
+            # else this won't make any sense
+            # this also provides us with the name which we need to provide to patch_attributes
+            configuration = self.get_config(cnamespace['namespace'], cnamespace['name'])['name']
+        return super().patch_attributes(cnamespace, configuration, dry_run=dry_run, entity=entity)
+
+    def display_status(self, configuration, entity='sample', filter_active=True):
+        """
+        Display summary of task statuses
+        Takes cnamespace and configuration arguments in the following formats:
+        1) cnamespace = {config JSON object} (must be present online)
+        2) cnamespace = "config name"
+        3) cnamespace = "config namespace/config name"
+        """
+        if isinstance(cnamespace, dict):
+            # given a dictionary, we just need to check that it's been uploaded, or
+            # else this won't make any sense
+            # this also provides us with the name which we need to provide to patch_attributes
+            configuration = self.get_config(cnamespace['namespace'], cnamespace['name'])['name']
+        else:
+            namespace, configuration = self.get_config(configuration, decode_only=True)
+        return super().display_status(configuration, entity=entity, filter_active=filter_active)
+
+    def list_submissions(self, config=None):
+        """
+        List all submissions from workspace
+        If config is provided, it must be in one of the following formats:
+        1) config = {config JSON object}
+        2) config = "config name"
+        3) config = "config namespace/config name"
+        """
+        submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
+        if submissions.status_code != 200:
+            raise APIException("Failed to list submissions", submissions)
+        submissions = submissions.json()
+
+        if config is not None:
+            ns, name = self.get_config(config, decode_only=True)
+            submissions = [
+                s for s in submissions if s['methodConfigurationName'] == name and s['methodConfigurationNamespace'] == ns
+            ]
+
+        return submissions

@@ -331,7 +331,7 @@ def fetch_method(reference, name=None, version=None, *, decode_only=False):
             name = methods.name
             # Even though a version was not provided by the user
             # we found the latest snapshot as a byproduct of the search
-            version = method.snapshotId
+            version = methods.snapshotId
         elif len(data) >= 2:
             # namespace / name
             namespace = data[0]
@@ -411,6 +411,61 @@ def get_method_version(namespace, name=None):
     return _get_method_version_internal(namespace, name)
 
 
+def fetch_config(reference, name=None, version=None, *, decode_only=False):
+    """
+    fetches a config json given a variety of reference formats
+    Note: This method only fetches public configurations. You must use a workspacemanager
+    to fetch configurations from a workspace
+    1) reference = {method configuration JSON}
+    2) reference = "config namespace", name = "config name", (optional) verison = "config version"
+    3) reference = "config name"
+    4) reference = "config namespace/config name"
+    5) reference = "config namespace/config name/config version"
+    """
+    if isinstance(reference, dict):
+        namespace = reference['namespace']
+        name = reference['name']
+        if 'methodConfigVersion' in reference:
+            version = reference['methodConfigVersion']
+    elif name is None:
+        # Just one argument
+        data = reference.split('/')
+        if len(data) == 1:
+            # Just a name
+            configs = list_configs().query('name == "{}"'.format(data[0]))
+            configs = configs.loc[configs.groupby('namespace').idxmax('snapshotId').snapshotId]
+            if len(configs) > 1:
+                raise ConfigNotUnique("Found more than one config with name '{}'. Must provide a namespace".format(data[0]))
+            if len(configs) == 0:
+                raise ConfigNotFound("No config by name '{}'".format(data[0]))
+            configs = configs.iloc[0]
+            namespace = configs.namespace
+            name = configs.name
+            # Even though a version was not provided by the user
+            # we found the latest snapshot as a byproduct of the search
+            version = configs.snapshotId
+        elif len(data) >= 2:
+            # namespace / name
+            namespace = data[0]
+            name = data[1]
+            if len(data) == 3:
+                version = data[2]
+            elif len(data) > 3:
+                raise TypeError("Unable to determine argument configuration from {}".format(reference))
+    else:
+        namespace = reference
+    if decode_only:
+        return (namespace, name, version)
+    if version is None:
+        version = _get_config_version_internal(namespace, name)
+    response = firecloud.api.get_repository_config(namespace, name, version)
+    if response.status_code == 404:
+        raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
+    elif response.status_code >= 400:
+        raise APIException("Failed to get method", response)
+    return response.json()
+
+
 def list_configs(namespace=None):
     """List all configurations in the repository"""
     r = firecloud.api.list_repository_configs()
@@ -424,30 +479,57 @@ def list_configs(namespace=None):
     return pd.DataFrame(r).sort_values(['name', 'snapshotId'])
 
 
-def get_config(namespace, name):
+def _get_config_internal(namespace, name):
     """Get all versions of a configuration from the repository"""
     r = firecloud.api.list_repository_configs()
     if r.status_code != 200:
-        raise APIException(r)
+        raise APIException("Failed to list repository configurations", r)
     r = r.json()
+    if len(r) == 0:
+        raise ConfigNotFound("No visible configurations")
     r = [m for m in r if m['name']==name and m['namespace']==namespace]
     return r
 
+def get_config(namespace, name=None):
+    """
+    Get all versions of a configuration from the repository
+    Takes arguments in any of the following formats:
+    1) namespace = {method configuration JSON}
+    2) namespace = "config namespace", name = "config name"
+    3) namespace = "config name"
+    4) namespace = "config namespace/config name"
+    """
+    namespace, name, version = fetch_config(namespace, name, decode_only=True)
+    return _get_config_internal(namespace, name)
 
-def get_config_version(namespace, name):
+def _get_config_version_internal(namespace, name):
     """Get latest configuration version"""
-    r = get_config(namespace, name)
+    r = _get_config_internal(namespace, name)
+    if len(r) == 0:
+        raise ConfigNotFound("No such config {}/{}".format(namespace, name))
     return np.max([m['snapshotId'] for m in r])
 
+def get_config_version(namespace, name=None):
+    """
+    Get latest configuration version
+    Takes arguments in any of the following formats:
+    1) namespace = {method configuration JSON}
+    2) namespace = "config namespace", name = "config name"
+    3) namespace = "config name"
+    4) namespace = "config namespace/config name"
+    """
+    namespace, name, version = fetch_config(namespace, name, decode_only=True)
+    return _get_config_version_internal(namespace, name)
 
-def get_config_json(namespace, name, snapshot_id=None):
-    """Get configuration JSON from repository"""
-    if snapshot_id is None:  # get latest version
-        snapshot_id = get_config_version(namespace, name)
-    r = firecloud.api.get_repository_config(namespace, name, snapshot_id)
-    if r.status_code != 200:
-        raise APIException(r)
-    return json.loads(r.json()['payload'])
+def get_config_json(namespace, name=None, snapshot_id=None):
+    """
+    Get configuration JSON from repository
+    1) namespace = "config namespace", name = "config name", (optional) verison = "config version"
+    2) namespace = "config name"
+    3) namespace = "config namespace/config name"
+    4) namespace = "config namespace/config name/config version"
+    """
+    return fetch_config(namespace, name, snapshot_id)
 
 
 def get_config_template(namespace, method=None, version=None):

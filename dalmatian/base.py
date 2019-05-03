@@ -757,7 +757,7 @@ class LegacyWorkspaceManager(object):
         return df
 
 
-    def import_config(self, cnamespace, cname):
+    def import_config(self, cnamespace, cname=None):
         """Import configuration from repository"""
         # get latest snapshot
         c = get_config(cnamespace, cname)
@@ -809,7 +809,7 @@ class LegacyWorkspaceManager(object):
                 print(r.text)
 
 
-    def copy_config(self, wm, cnamespace, config):
+    def copy_config(self, wm, cnamespace, config=None):
         """Copy configuration from another workspace"""
         self.update_config(wm.get_config(cnamespace, config))
 

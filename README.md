@@ -166,10 +166,14 @@ export CLOUDSDK_PYTHON=/usr/local/var/pyenv/versions/2.7.12/bin/python
 * The _workflow\_inputs_ argument to `dalmatian.autofill_config_template` is now
 **kewyord-only**
 * The _mode_ argument to `dalmatian.redact_method` is now **keyword-only**
+* The _dry\_run_ and _entity_ arguments to `dalmatian.WorkspaceManager.patch_attributes` are now **keword-only**
+
 
 ## New Features
 * `dalmatian.fetch_method`: new function to handle the variety of acceptable argument
 types and return a method JSON dictionary
+* `dalmatian.fetch_config`: new function to handle the variety of acceptable
+argument types and return a configuration JSON dictionary
 * [Blob API](https://googleapis.github.io/google-cloud-python/latest/storage/index.html) now available via `dalmatian.getblob`
 * `dalmatian.WorkspaceManager.upload_entities` now automatically checks for and uploads valid filepaths present in the dataframe
 * `dalmatian.WorkspaceManager.update_attributes` now automatically checks for and uploads valid filepaths present in the attributes
@@ -181,13 +185,6 @@ only to samples/pairs belonging to the given set.
 your submission configuration and entity before sending to firecloud.
 * `dalmatian.WorkspaceManager.validate_config`: new function which can be used to
 check that required inputs are defined on a method configuration
-* `dalmatian.WorkspaceManager.fetch_config_name`: new function which can be used
-to get the canonical configuration name given a reference in any of the following
-argument combinations:
-    * `(config_namespace, config_name)` (Typical syntax used in legacy dalmatian)
-    * `(config_name)` (Only works if the config name is unique within the workspace)
-    * `("config_namespace/config_name")` (single string argument containing the canonical name)
-    * `({"namespace": "config_namespace", "name": "config_name"})` (Format returned by `list_configs`)
 * `dalmatian.WorkspaceManager.evaluate_expression`: Can be used to evaluate workspace
 expressions (such as "this.samples.sample_id" or "workspace.gtf") within the context
 of the workspace. Works in both online and offline modes
@@ -259,6 +256,18 @@ Unchanged functions:
 * `dalmatian.compare_wdl` was left unchanged
 * `dalmatian.update_method` was left unchanged
 
+### Config Referencing
+
+**Most** methods (except those listed at the bottom of this section) which operate
+on method configurations, can now take arguments in a variety of formats.
+In general, you can reference a method with:
+* A method configuration JSON dictionary
+* The namespace and name as two separate arguments (Legacy syntax)
+    * In functions which take a version, you may provide it as an optional 3rd argument
+* A string in the format "name"
+* A string in the format "namespace/name"
+* A string in the format "namespace/name/version"
+
 ## Other Changes
 * The _name_ argument on `dalmatian.get_method` is now optional
 * The _name_ argument on `dalmatian.get_method_version` is now optional
@@ -271,6 +280,15 @@ Unchanged functions:
 * Changed the call syntax for `dalmatian.redact_method`:
     * _method\_name_ argument is now optional
     * **Breaking Change:** _mode_ is now **keword-only** but still required
+* The _name_ argument to `dalmatian.get_config` is now optional
+* The _name_ argument to `dalmatian.get_config_version` is now optional
+* The _name_ and _snapshot\_it_ arguments to `dalmatian.get_config_json` are now optional
+* Changed the call syntax for `dalmatian.get_config`:
+    * Renamed _cnamespace_ to _reference_
+    * The _name_ argument is now optional
+    * Added keyword-only argument _decode\_only_ to simply parse the provided arguments
+    into a namespace and workspace
+    * Accepted argument formats match the above syntax for `dalmatian.fetch_config`, excluding those which include a version
 * `dalmatian.WorkspaceManager.update_attributes` can now take attributes as keyword arguments in addition to providing a premade dictionary
 * Replaced `AssertionErrors` with `APIExceptions`, which are more descriptive and easier to handle
 * `dalmatian.WorkspaceManager.update_config` now accepts an optional `wdl` argument, which is a new version of the method WDL to upload. This can be either the path to a wdl file or the raw wdl text
@@ -289,3 +307,8 @@ Unchanged functions:
     * `("config_namespace/config_name")`
     * `({"namespace": "config_namespace", "name": "config_name"})` (Format returned by `list_configs`)
 * `dalmatian.WorkspaceManager.update_participant_entities` now makes up to 5 attempts
+* Changed the call syntax for `dalmatian.WorkspaceManager.patch_attributes`:
+    * The _cnamespace_ argument now accepts valid config reference formats
+    * The _configuration_ argument is now optional
+    * **Breaking Change:** The _dry\_run_ argument is now **keyword-only**
+    * **Breaking Change:** The _entity_ argument is now **keyword-only**
