@@ -497,7 +497,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
             # since the timeout is thread-specific it needs to be set within
             # the thread workers
             with set_timeout(DEFAULT_SHORT_TIMEOUT):
-                r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', participant_id, attrs)
+                try:
+                    r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', participant_id, attrs)
+                except requests.ReadTimeout:
+                    return participant_id, 500 # fake a bad status code to requeue
             return participant_id, r.status_code
 
         n_participants = len(participants)
