@@ -400,7 +400,7 @@ def _get_method_version_internal(namespace, name):
     r = _get_method_internal(namespace, name)
     if len(r) == 0:
         raise MethodNotFound("No such method {}/{}".format(namespace, name))
-    return np.max([m['snapshotId'] for m in r])
+    return int(np.max([m['snapshotId'] for m in r]))
 
 def get_method_version(namespace, name=None):
     """
@@ -517,7 +517,7 @@ def _get_config_version_internal(namespace, name):
     r = _get_config_internal(namespace, name)
     if len(r) == 0:
         raise ConfigNotFound("No such config {}/{}".format(namespace, name))
-    return np.max([m['snapshotId'] for m in r])
+    return int(np.max([m['snapshotId'] for m in r]))
 
 def get_config_version(namespace, name=None):
     """

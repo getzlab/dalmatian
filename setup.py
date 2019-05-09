@@ -34,7 +34,7 @@ setup(
     'matplotlib',
     'pandas',
     'pytz',
-    'firecloud',
+    'firecloud>=0.16.9',
     'ipython',
     'iso8601',
     "google-cloud-storage>=1.13.2",

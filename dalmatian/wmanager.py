@@ -387,7 +387,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             r = firecloud.api.update_workspace_config(self.namespace, self.workspace,
                     config['namespace'], config['name'], config)
             if r.status_code == 200:
-                print('Successfully updated configuration {}/{}'.format(json_body['namespace'], json_body['name']))
+                print('Successfully updated configuration {}/{}'.format(config['namespace'], config['name']))
                 return True
             else:
                 raise APIException("Failed to update existing configuration", r)
@@ -544,6 +544,19 @@ class WorkspaceManager(LegacyWorkspaceManager):
             raise ConfigNotFound("No such config {}/{} in this workspace".format(namespace, name))
         return self.tentative_json(response)
 
+    @_synchronized
+    def _configs_live_update(self):
+        """
+        Internal Use. Fetches the list of configs, but forces
+        the workspace to go online
+        """
+        state = self.live
+        try:
+            self.live = True
+            return self.configs
+        finally:
+            self.live = state
+
     # =============
     # Operator Cache Method Overrides
     # =============
@@ -644,7 +657,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         """
         if "namespace" not in config or "name" not in config:
             raise ValueError("Config missing required keys 'namespace' and 'name'")
-        mnamespace = confog['methodRepoMethod']['methodNamespace']
+        mnamespace = config['methodRepoMethod']['methodNamespace']
         mname = config['methodRepoMethod']['methodName']
         if wdl is not None:
             with contextlib.ExitStack() as stack:
@@ -655,7 +668,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     wdl = tmp.name
                 if synopsis is None:
                     synopsis = "Runs " + mname
-                update_method(mnamespace, mname, synopsis, wdl)
+                update_method(mnamespace, mname, synopsis, wdl, delete_old=False)
                 time.sleep(5)
         if config['methodRepoMethod']['methodVersion'] == 'latest':
             config['methodRepoMethod']['methodVersion'] = get_method_version(
@@ -665,7 +678,13 @@ class WorkspaceManager(LegacyWorkspaceManager):
         identifier = '{}/{}'.format(config['namespace'], config['name'])
         key = 'config:' + identifier
         self.cache[key] = config # add full config object to cache
-        if identifier not in {'{}/{}'.format(c['namespace'], c['name']) for c in self.configs}:
+        try:
+            self.list_configs()
+        except APIException:
+            # Don't worry too much if we can't populate cache here
+            self.cache['configs'] = []
+        self.dirty.add('configs')
+        if identifier not in {'{}/{}'.format(c['namespace'], c['name']) for c in self.cache['configs']}:
             # New config
             # Append to configs cache entry since we know cache was just populated above
             self.cache['configs'].append(
@@ -700,11 +719,18 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 return result
             self.go_offline()
         self.pending_operations.append((
-            None,
+            None, # Dont worry about a getter. The config entry is exactly as it will appear in FC
             partial(self._upload_config, config),
             None
         ))
-        return False
+        self.pending_operations.append((
+            'configs',
+            None,
+            self._configs_live_update
+        ))
+        return True # Default to True. If we get here, the config has been written into the cache
+
+    update_configuration = update_config
 
     @property
     @_synchronized
