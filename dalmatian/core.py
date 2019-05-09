@@ -304,10 +304,13 @@ def fetch_method(reference, name=None, version=None, *args, decode_only=False):
         raise TypeError("decode_only is a keyword-only argument")
     if isinstance(reference, dict):
         # it's a config or method object
-        if "method" in reference and "snapshotId" in reference:
+        if "name" in reference and "snapshotId" in reference:
             if decode_only:
                 return (reference['namespace'], reference['name'], reference['snapshotId'])
-            return reference #because it's already a method
+            if 'managers' in reference and 'public' in reference and 'payload' in reference:
+                return reference #because it's already a method
+            else:
+                return fetch_method(reference['namespace'], reference['name'], reference['snapshotId'])
         if "methodRepoMethod" in reference:
             reference = reference['methodRepoMethod']
         version = (
@@ -358,7 +361,7 @@ def fetch_method(reference, name=None, version=None, *args, decode_only=False):
         raise APIException("Failed to get method", response)
     return response.json()
 
-def list_methods(namespace=None):
+def list_methods(namespace=None, name=None):
     """List all methods in the repository"""
     r = firecloud.api.list_repository_methods()
     if r.status_code != 200:
@@ -367,6 +370,8 @@ def list_methods(namespace=None):
 
     if namespace is not None:
         r = [m for m in r if m['namespace']==namespace]
+    if name is not None:
+        r = [m for m in r if m['name']==name]
 
     return pd.DataFrame(r).sort_values(['name', 'snapshotId'])
 
