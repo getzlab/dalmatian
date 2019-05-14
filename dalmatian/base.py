@@ -294,13 +294,6 @@ class LegacyWorkspaceManager(object):
                 raise APIException(r)
         print('\n    Finished attaching {}s to {} participants'.format(etype, len(participant_ids)))
         if self.initialize_hound() is not None:
-            self.hound.write_log_entry(
-                'upload',
-                "Updated participant.{}s_".format(etype),
-                entities=[
-                    os.path.join('participant', pid) for pid in participant_ids
-                ]
-            )
             for pid in participant_ids:
                 self.hound.update_entity_meta(
                     'participant',
@@ -384,14 +377,6 @@ class LegacyWorkspaceManager(object):
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
         r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)
         if self.initialize_hound() is not None:
-            self.hound.write_log_entry(
-                'upload',
-                "Updating {} workspace attributes: {}".format(
-                    len(attr_dict),
-                    ', '.join(attr_dict)
-                ),
-                entities=['workspace']
-            )
             self.hound.update_workspace_meta(
                 "Updating {} workspace attributes: {}".format(
                     len(attr_dict),
@@ -1124,13 +1109,6 @@ class LegacyWorkspaceManager(object):
                 print('{} set "{}" ({} {}s) successfully updated.'.format(
                     etype.capitalize(), set_id, len(entity_ids), etype))
                 if self.initialize_hound() is not None:
-                    self.hound.write_log_entry(
-                        'upload',
-                        "Updated entity set membership: {}_set/{}".format(etype, set_id),
-                        entities=[
-                            os.path.join(etype, eid) for eid in entity_ids
-                        ]
-                    )
                     self.hound.update_entity_meta(
                         etype+'_set',
                         set_id,
@@ -1196,13 +1174,6 @@ class LegacyWorkspaceManager(object):
         if r.status_code == 200:
             print('Set of sample sets "{}" successfully created.'.format(super_set_id))
             if self.initialize_hound() is not None:
-                self.hound.write_log_entry(
-                    'upload',
-                    "Updated super set membership: sample_set/{}".format(super_set_id),
-                    entities=[
-                        os.path.join('sample_set', eid) for eid in sample_set_ids
-                    ]
-                )
                 self.hound.update_entity_meta(
                     'sample_set',
                     super_set_id,
@@ -1281,13 +1252,6 @@ class LegacyWorkspaceManager(object):
         if r.status_code == 204:
             print(msg)
             if self.initialize_hound() is not None:
-                self.hound.write_log_entry(
-                    'upload',
-                    "Deleting {} {}-attributes".format(
-                        len(attr_list),
-                        etype
-                    )
-                )
                 for obj in attr_list:
                     self.hound.update_entity_meta(
                         etype,
@@ -1631,17 +1595,6 @@ class LegacyWorkspaceManager(object):
             else:
                 print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
             if self.initialize_hound() is not None:
-                self.hound.write_log_entry(
-                    'upload',
-                    "Updating attributes for {} {}s".format(
-                        len(attrs),
-                        etype
-                    ),
-                    entities=[
-                        os.path.join(etype, obj['name'])
-                        for obj in attr_list
-                    ]
-                )
                 for obj in attr_list:
                     self.hound.update_entity_meta(
                         etype,
