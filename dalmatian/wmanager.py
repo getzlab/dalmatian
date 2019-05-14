@@ -128,6 +128,15 @@ PreflightSuccess = namedtuple(
 )
 
 # =============
+# Hound Conflict Helper
+# =============
+
+ProvenanceConflict = namedtuple(
+    "ProvenanceConflict",
+    ['liveValue', 'latestRecord']
+)
+
+# =============
 # Operator Cache Helper Decorators
 # =============
 
@@ -581,16 +590,25 @@ class WorkspaceManager(LegacyWorkspaceManager):
         finally:
             self.live = state
 
+    def _check_conflicting_value(self, value, record):
+        if record is None or value == record.attributeValue:
+            return record
+        return ProvenanceConflict(value, record)
+
     def _build_provenance_series_internal(self, etype, entity):
         # Path 1: enumerate all updates under the given entity then filter
         # This is 3x faster than path 2, if there is not a long attribute history
+        print(etype, type(entity), entity.name, entity.index)
         return {
             **{
                 attr: None
                 for attr in entity.index
             },
             **{
-                entry.attributeName: entry
+                entry.attributeName: self._check_conflicting_value(
+                    entity[entry.attributeName] if entry.attributeName in entity.index else None,
+                    entry
+                )
                 for entry in self.hound.entity_attribute_provenance(etype, entity.name)
             }
         }
@@ -1728,11 +1746,14 @@ class WorkspaceManager(LegacyWorkspaceManager):
         """
         self.initialize_hound()
         return {
-            attr: self.hound.latest(
-                self.hound.get_entries(os.path.join('hound', 'workspace', attr)),
-                'updates'
+            attr: self._check_conflicting_value(
+                value,
+                self.hound.latest(
+                    self.hound.get_entries(os.path.join('hound', 'workspace', attr)),
+                    'updates'
+                )
             )
-            for attr in self.attributes
+            for attr, value in self.attributes.items()
         }
 
     def entity_provenance(self, etype, df):
@@ -1749,7 +1770,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
         self.initialize_hound()
         if isinstance(df, pd.DataFrame):
             return df.copy().apply(
-                lambda row: pd.Series(data=self._build_provenance_series_internal(etype, row), index=row.index.copy(), name=row.name)
+                lambda row: pd.Series(data=self._build_provenance_series_internal(etype, row), index=row.index.copy(), name=row.name),
+                axis='columns'
             )
         elif isinstance(df, pd.Series):
             return pd.Series(
