@@ -132,8 +132,6 @@ class LegacyWorkspaceManager(object):
         if r.status_code == 202:
             print('Workspace {}/{} successfully deleted.'.format(self.namespace, self.workspace))
             print('  * '+r.json()['message'])
-            if self.initialize_hound() is not None:
-                self.hound.update_workspace_meta("Deleted workspace")
         else:
             raise APIException("Failed to delete workspace", r)
 
