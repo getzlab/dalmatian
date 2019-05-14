@@ -557,6 +557,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     os.path.join('participant', pid) for pid in participants
                 ]
             )
+            for pid in participants:
+                self.hound.update_entity_meta(
+                    'participant',
+                    pid,
+                    "Updated {} membership".format(column)
+                )
 
     @_synchronized
     @_read_from_cache(lambda self, namespace, name: 'config:{}/{}'.format(namespace, name))

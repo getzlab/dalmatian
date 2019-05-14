@@ -296,11 +296,17 @@ class LegacyWorkspaceManager(object):
         if self.initialize_hound() is not None:
             self.hound.write_log_entry(
                 'upload',
-                "Updated participant.{}s".format(etype),
+                "Updated participant.{}s_".format(etype),
                 entities=[
                     os.path.join('participant', pid) for pid in participant_ids
                 ]
             )
+            for pid in participant_ids:
+                self.hound.update_entity_meta(
+                    'participant',
+                    pid,
+                    "Updated {}s_ membership".format(etype)
+                )
 
 
     def update_participant_samples(self):
@@ -1119,6 +1125,11 @@ class LegacyWorkspaceManager(object):
                             os.path.join(etype, eid) for eid in entity_ids
                         ]
                     )
+                    self.hound.update_entity_meta(
+                        etype+'_set',
+                        set_id,
+                        "Updated set members"
+                    )
                     self.hound.update_entity_attribute(
                         etype+'_set',
                         set_id,
@@ -1185,6 +1196,11 @@ class LegacyWorkspaceManager(object):
                     entities=[
                         os.path.join('sample_set', eid) for eid in sample_set_ids
                     ]
+                )
+                self.hound.update_entity_meta(
+                    'sample_set',
+                    super_set_id,
+                    "Updated super_set members"
                 )
                 self.hound.update_entity_attribute(
                     'sample_set',
