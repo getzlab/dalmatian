@@ -1,3 +1,9 @@
+import sys
+if sys.version_info.major < 3 or sys.version_info.minor < 2:
+    raise ValueError("Dalmatian is only compatible with python 3.3 and above")
+if sys.version_info.minor < 5:
+    import warnings
+    warnings.warn("Dalmatian may not function properly on python < 3.5")
 import os
 import re
 from setuptools import setup, find_packages
@@ -28,9 +34,13 @@ setup(
     'matplotlib',
     'pandas',
     'pytz',
-    'firecloud',
+    'firecloud>=0.16.9',
     'ipython',
-    'iso8601'
+    'iso8601',
+    "google-cloud-storage>=1.13.2",
+    "agutil>=4.0.2",
+    "crayons>=0.2.0",
+    "hound>=0.1.2"
     ],
     classifiers = [
         "Programming Language :: Python :: 2",
