@@ -598,7 +598,6 @@ class WorkspaceManager(LegacyWorkspaceManager):
     def _build_provenance_series_internal(self, etype, entity):
         # Path 1: enumerate all updates under the given entity then filter
         # This is 3x faster than path 2, if there is not a long attribute history
-        print(etype, type(entity), entity.name, entity.index)
         return {
             **{
                 attr: None
