@@ -392,6 +392,12 @@ class LegacyWorkspaceManager(object):
                 ),
                 entities=['workspace']
             )
+            self.hound.update_workspace_meta(
+                "Updating {} workspace attributes: {}".format(
+                    len(attr_dict),
+                    ', '.join(attr_dict)
+                )
+            )
             for k,v in attr_dict.items():
                 self.hound.update_workspace_attribute(k, v)
         if r.status_code != 200:
