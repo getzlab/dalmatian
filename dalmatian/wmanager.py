@@ -591,7 +591,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.live = state
 
     def _check_conflicting_value(self, value, record):
-        if record is None or value == record.attributeValue:
+        if isinstance(value, np.ndarray):
+            value = list(value)
+        rvalue = record.attributeValue
+        if isinstance(rvalue, np.ndarray):
+            rvalue = list(rvalue)
+        if record is None or np.all(value == rvalue) or (pd.isna(value) and pd.isna(rvalue)):
             return record
         return ProvenanceConflict(value, record)
 
@@ -1779,3 +1784,53 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 name=df.name
             )
         raise TypeError("df must be a pd.Series or pd.DataFrame")
+
+    def synchronize_hound_records(self):
+        """
+        Slow operation
+        Updates conflicting or missing attributes in hound to match their current
+        live value.
+        Updates workspace attributes and all entity attributes
+        """
+        with self.initialize_hound().with_reason("<Automated> Synchronizing hound with Firecloud"):
+            print("Checking workspace attributes")
+            updates = {
+                attr: self.attributes[attr]
+                for attr, prov in self.attribute_provenance().items()
+                if prov is None or isinstance(prov, ProvenanceConflict)
+            }
+            if len(updates):
+                print("Updating", len(updates), "hound attribute records")
+                self.hound.update_workspace_meta(
+                    "Updating {} workspace attributes: {}".format(
+                        len(updates),
+                        ', '.join(updates)
+                    )
+                )
+                for k,v in updates.items():
+                    self.hound.update_workspace_attribute(k, v)
+            for etype in self.entity_types:
+                print("Checking", etype, "attributes")
+                live_df = self._get_entities_internal(etype)
+                for eid, data in self.entity_provenance(etype, live_df).iterrows():
+                    updates = {
+                        attr for attr, val in data.items()
+                        if val is None or isinstance(val, ProvenanceConflict)
+                    }
+                    if len(updates):
+                        print("Updating", len(updates), "attributes for", etype, eid)
+                        self.hound.update_entity_meta(
+                            etype,
+                            eid,
+                            "Updating {} attributes: {}".format(
+                                len(updates),
+                                ', '.join(updates)
+                            )
+                        )
+                        for attr in updates:
+                            self.hound.update_entity_attribute(
+                                etype,
+                                eid,
+                                attr,
+                                live_df[attr][eid]
+                            )
