@@ -581,6 +581,30 @@ class WorkspaceManager(LegacyWorkspaceManager):
         finally:
             self.live = state
 
+    def _build_provenance_series_internal(self, etype, entity):
+        # Path 1: enumerate all updates under the given entity then filter
+        # This is 3x faster than path 2, if there is not a long attribute history
+        return {
+            **{
+                attr: None
+                for attr in entity.index
+            },
+            **{
+                entry.attributeName: entry
+                for entry in self.hound.entity_attribute_provenance(etype, entity.name)
+            }
+        }
+        # # Path 2: Make a fast query for each individual attribute
+        # # This is faster if we are fetching a small number of attributes
+        # # That's hard to predict, so we'll leave this path disabled
+        # return {
+        #     attr: self.hound.latest(
+        #         self.hound.get_entries(os.path.join('hound', etype, entity.name, attr)),
+        #         'updates'
+        #     )
+        #     for attr in entity.index
+        # }
+
     # =============
     # Operator Cache Method Overrides
     # =============
@@ -1694,3 +1718,45 @@ class WorkspaceManager(LegacyWorkspaceManager):
             workflow_status_df['start_time'] = [iso8601.parse_date(metadata_dict[i]['start']).astimezone(pytz.timezone(self.timezone)).strftime('%H:%M') for i in workflow_status_df.index]
 
         return workflow_status_df, task_dfs
+
+    def attribute_provenance(self):
+        """
+        Returns a provenance dictionary for the workspace
+        { attributeName: Provenance }
+        If Hound cannot find an entry for a given attribute, it will be recorded
+        as None in the dictionary
+        """
+        if self.hound is None:
+            raise ValueError("The workspace's Hound client is not initialized. Run WorkspaceManager.initialize_hound()")
+        return {
+            attr: self.hound.latest(
+                self.hound.get_entries(os.path.join('hound', 'workspace', attr)),
+                'updates'
+            )
+            for attr in self.attributes
+        }
+
+    def entity_provenance(self, etype, df):
+        """
+        Maps the given df/series to contain provenance objects
+        etype: The entity type
+        df: pd.DataFrame or pd.Series of entity metadata.
+        For a series: Name must be entity_id, index must contain desired attributes
+        For a dataframe: index must contain entity_ids, columns must contain desired attributes
+        Return value will be of the same type and shape as the input df
+        If hound cannot find an entry for a given attribute, it will be set to
+        None in the output
+        """
+        if self.hound is None:
+            raise ValueError("The workspace's Hound client is not initialized. Run WorkspaceManager.initialize_hound()")
+        if isinstance(df, pd.DataFrame):
+            return df.copy().apply(
+                lambda row: pd.Series(data=self._build_provenance_series_internal(etype, row), index=row.index.copy(), name=row.name)
+            )
+        elif isinstance(df, pd.Series):
+            return pd.Series(
+                data=self._build_provenance_series_internal(etype, df),
+                index=df.index.copy(),
+                name=df.name
+            )
+        raise TypeError("df must be a pd.Series or pd.DataFrame")

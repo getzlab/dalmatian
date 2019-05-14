@@ -78,16 +78,28 @@ class LegacyWorkspaceManager(object):
             self.namespace = namespace
             self.workspace = workspace
         self.timezone  = timezone
+        self.__credentials = credentials
+        self.__user_project = user_project
+        self.hound = None
         try:
-            self.hound = HoundClient(self.get_bucket_id(), credentials=credentials, user_project=user_project)
+            self.initialize_hound()
         except:
             warnings.warn("Unable to initialize Hound client. The workspace may not exist")
             import traceback
             traceback.print_exc()
-            self.__credentials = credentials
-            self.__user_project = user_project
-            self.hound = None
 
+    def initialize_hound(self, credentials=None, user_project=None):
+        """
+        Initializes the HoundClient for the workspace, if it is None
+        credentials: (optional) google.cloud.auth.Credentials to use when
+        interacting with bucket, if not using default credentials
+        user_project: (optional) name of project to bill, if bucket is requester pays
+        """
+        if credentials is None:
+            credentials = self.__credentials
+        if user_project is None:
+            user_project = self.__user_project
+        self.hound = HoundClient(self.get_bucket_id(), credentials=credentials, user_project=user_project)
 
     def create_workspace(self, wm=None):
         """Create the workspace, or clone from another"""
@@ -96,7 +108,10 @@ class LegacyWorkspaceManager(object):
             if r.status_code==201:
                 print('Workspace {}/{} successfully created.'.format(self.namespace, self.workspace))
                 if self.hound is None:
-                    self.hound = HoundClient(self.get_bucket_id(), credentials=self.__credentials, user_project=self.__user_project)
+                    try:
+                        self.initialize_hound()
+                    except:
+                        warnings.warn("Unable to initialize Hound client. The workspace may not be ready yet")
                 self.hound.update_workspace_meta("Created Empty Workspace")
                 return True
             else:
@@ -107,7 +122,10 @@ class LegacyWorkspaceManager(object):
                 print('Workspace {}/{} successfully cloned from {}/{}.'.format(
                     self.namespace, self.workspace, wm.namespace, wm.workspace))
                 if self.hound is None:
-                    self.hound = HoundClient(self.get_bucket_id(), credentials=self.__credentials, user_project=self.__user_project)
+                    try:
+                        self.initialize_hound()
+                    except:
+                        warnings.warn("Unable to initialize Hound client. The workspace may not be ready yet")
                 self.hound.update_workspace_meta("Cloned workspace from {}/{}".format(wm.namespace, wm.workspace))
                 return True
             else:
