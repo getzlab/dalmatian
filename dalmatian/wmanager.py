@@ -593,7 +593,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
     def _check_conflicting_value(self, value, record):
         if isinstance(value, np.ndarray):
             value = list(value)
-        rvalue = record.attributeValue
+        rvalue = record.attributeValue if record is not None else None
         if isinstance(rvalue, np.ndarray):
             rvalue = list(rvalue)
         if record is None or np.all(value == rvalue) or (pd.isna(value) and pd.isna(rvalue)):
@@ -1793,6 +1793,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
         Updates workspace attributes and all entity attributes
         """
         with self.initialize_hound().with_reason("<Automated> Synchronizing hound with Firecloud"):
+            self.hound.write_log_entry(
+                'other',
+                "Starting database sync with FireCloud"
+            )
             print("Checking workspace attributes")
             updates = {
                 attr: self.attributes[attr]
