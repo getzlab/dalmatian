@@ -530,11 +530,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 if status >= 400:
                     retries.append(k)
                 elif self.initialize_hound() is not None:
-                    self.hound.update_entity_attributes(
+                    self.hound.update_entity_attribute(
                         'participant',
                         k,
                         column,
-                        entities[k]
+                        list(entities[k]),
+                        "<Automated> Populating attribute from entity references"
                     )
 
             if len(retries):
@@ -550,8 +551,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
         print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
         if self.initialize_hound() is not None:
             self.hound.write_log_entry(
-                'other',
-                'Updated participant {}'.format(column),
+                'upload',
+                'Updated participant.{}'.format(column),
                 entities=[
                     os.path.join('participant', pid) for pid in participants
                 ]

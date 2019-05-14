@@ -287,15 +287,16 @@ class LegacyWorkspaceManager(object):
                     'participant',
                     k,
                     '{}s_'.format(etype),
-                    entitites_dict[k]
+                    list(entitites_dict[k]),
+                    "<Automated> Populating attribute from entity references"
                 )
             if r.status_code != 200:
                 raise APIException(r)
         print('\n    Finished attaching {}s to {} participants'.format(etype, len(participant_ids)))
         if self.initialize_hound() is not None:
             self.hound.write_log_entry(
-                'other',
-                "Updated participant {}s".format(etype),
+                'upload',
+                "Updated participant.{}s".format(etype),
                 entities=[
                     os.path.join('participant', pid) for pid in participant_ids
                 ]
@@ -1259,7 +1260,7 @@ class LegacyWorkspaceManager(object):
             print(msg)
             if self.initialize_hound() is not None:
                 self.hound.write_log_entry(
-                    'other',
+                    'upload',
                     "Deleting {} {}-attributes".format(
                         len(attr_list),
                         etype
