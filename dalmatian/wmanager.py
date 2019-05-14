@@ -613,7 +613,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     entity[entry.attributeName] if entry.attributeName in entity.index else None,
                     entry
                 )
-                for entry in self.hound.entity_attribute_provenance(etype, entity.name)
+                for entry in self.hound.ientity_attribute_provenance(etype, entity.name)
             }
         }
         # # Path 2: Make a fast query for each individual attribute
