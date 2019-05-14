@@ -374,7 +374,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         this method takes over
         """
         identifier = '{}/{}'.format(config['namespace'], config['name'])
-        if self.hound is not None:
+        if self.initialize_hound() is not None:
             self.hound.write_log_entry(
                 'other',
                 "Uploaded/Updated method configuration: {}/{}".format(
@@ -520,7 +520,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             for k, status in status_bar.iter(update_participant(participants), len(participants), prepend="Updating {}s for participants ".format(etype)):
                 if status >= 400:
                     retries.append(k)
-                elif self.hound is not None:
+                elif self.initialize_hound() is not None:
                     self.hound.update_entity_attributes(
                         'participant',
                         k,
@@ -539,7 +539,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 break
 
         print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
-        if self.hound is not None:
+        if self.initialize_hound() is not None:
             self.hound.write_log_entry(
                 'other',
                 'Updated participant {}'.format(column),
@@ -1025,7 +1025,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             if isinstance(value, str) and os.path.isfile(value):
                 path = '{}/{}'.format(base_path, os.path.basename(value))
                 uploads.append(upload_to_blob(value, path))
-                if self.hound is not None:
+                if self.initialize_hound() is not None:
                     self.hound.write_log_entry(
                         'upload',
                         "Uploading new file to workspace: {} ({})".format(
@@ -1161,7 +1161,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                         os.path.basename(value)
                     )
                     uploads.append(upload_to_blob(value, path))
-                    if self.hound is not None:
+                    if self.initialize_hound() is not None:
                         self.hound.write_log_entry(
                             'upload',
                             "Uploading new file to workspace: {} ({})".format(
@@ -1510,7 +1510,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 )
             )
             if result is not None:
-                if self.hound is not None:
+                if self.initialize_hound() is not None:
                     self.hound.update_workspace_meta(
                         "Updated ACL: {}".format(repr(acl))
                     )
@@ -1726,8 +1726,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         If Hound cannot find an entry for a given attribute, it will be recorded
         as None in the dictionary
         """
-        if self.hound is None:
-            raise ValueError("The workspace's Hound client is not initialized. Run WorkspaceManager.initialize_hound()")
+        self.initialize_hound()
         return {
             attr: self.hound.latest(
                 self.hound.get_entries(os.path.join('hound', 'workspace', attr)),
@@ -1747,8 +1746,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         If hound cannot find an entry for a given attribute, it will be set to
         None in the output
         """
-        if self.hound is None:
-            raise ValueError("The workspace's Hound client is not initialized. Run WorkspaceManager.initialize_hound()")
+        self.initialize_hound()
         if isinstance(df, pd.DataFrame):
             return df.copy().apply(
                 lambda row: pd.Series(data=self._build_provenance_series_internal(etype, row), index=row.index.copy(), name=row.name)
