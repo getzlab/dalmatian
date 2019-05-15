@@ -217,7 +217,7 @@ class LegacyWorkspaceManager(object):
                     len(participant_df),
                 ),
                 entities=[
-                    os.path.join('participant', eid) for eid in df['entity:participant_id']
+                    os.path.join('participant', eid) for eid in participant_ids
                 ]
             )
 

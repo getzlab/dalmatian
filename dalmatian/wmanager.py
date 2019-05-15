@@ -219,6 +219,34 @@ def capture(display=True):
             print(stdout_buff.read(), end='')
             stdout_buff.seek(0,0)
 
+def call_with_context(ctx, func, *args, **kwargs):
+    """
+    Returns the value of func(*args, **kwargs) within the context
+    """
+    with ctx:
+        return func(*args, **kwargs)
+
+def partial_with_hound_context(hound, func, *args, **kwargs):
+    """
+    Retuns a partially bound function
+    Propagates the currently active hound reason (if any)
+    Useful for capturing the current contextual hound reason when queueing a background action
+    """
+    if hound is not None:
+        reason = hound.context_reason.reason if hasattr(hound.context_reason, 'reason') else None
+        return partial(
+            call_with_context,
+            hound.with_reason(reason),
+            func,
+            *args,
+            **kwargs
+        )
+    return partial(
+        func,
+        *args,
+        **kwargs
+    )
+
 class WorkspaceManager(LegacyWorkspaceManager):
     # This abstraction provides 2 benefits
     # 1) The code is now split between 2 files
@@ -523,40 +551,42 @@ class WorkspaceManager(LegacyWorkspaceManager):
 
         n_participants = len(participants)
 
-        for attempt in range(5):
-            retries = []
+        with contextlib.ExitStack() as stack:
+            if self.initialize_hound() is not None:
+                stack.enter_context(self.hound.batch())
+                stack.enter_context(self.hound.with_reason("<Automated> Populating attribute from entity references"))
 
-            for k, status in status_bar.iter(update_participant(participants), len(participants), prepend="Updating {}s for participants ".format(etype)):
-                if status >= 400:
-                    retries.append(k)
-                elif self.initialize_hound() is not None:
-                    self.hound.update_entity_attribute(
-                        'participant',
-                        k,
-                        column,
-                        list(entities[k]),
-                        "<Automated> Populating attribute from entity references"
-                    )
+            for attempt in range(5):
+                retries = []
 
-            if len(retries):
-                if attempt >= 4:
-                    print("\nThe following", len(retries), "participants could not be updated:", ', '.join(retries), file=sys.stderr)
-                    raise APIException("{} participants could not be updated after 5 attempts".format(len(retries)))
+                for k, status in status_bar.iter(update_participant(participants), len(participants), prepend="Updating {}s for participants ".format(etype)):
+                    if status >= 400:
+                        retries.append(k)
+                    elif self.hound is not None:
+                        self.hound.update_entity_meta(
+                            'participant',
+                            k,
+                            "Updated {} membership".format(column)
+                        )
+                        self.hound.update_entity_attribute(
+                            'participant',
+                            k,
+                            column,
+                            list(entities[k])
+                        )
+
+                if len(retries):
+                    if attempt >= 4:
+                        print("\nThe following", len(retries), "participants could not be updated:", ', '.join(retries), file=sys.stderr)
+                        raise APIException("{} participants could not be updated after 5 attempts".format(len(retries)))
+                    else:
+                        print("\nRetrying remaining", len(retries), "participants")
+                        participants = [item for item in retries]
                 else:
-                    print("\nRetrying remaining", len(retries), "participants")
-                    participants = [item for item in retries]
-            else:
-                break
+                    break
 
-        print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
-        if self.initialize_hound() is not None:
-            for pid in participants:
-                self.hound.update_entity_meta(
-                    'participant',
-                    pid,
-                    "Updated {} membership".format(column)
-                )
-
+            print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
+            
     @_synchronized
     @_read_from_cache(lambda self, namespace, name: 'config:{}/{}'.format(namespace, name))
     def _get_config_internal(self, namespace, name):
@@ -790,7 +820,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.go_offline()
         self.pending_operations.append((
             None, # Dont worry about a getter. The config entry is exactly as it will appear in FC
-            partial(self._upload_config, config),
+            partial_with_hound_context(self.initialize_hound(), self._upload_config, config),
             None
         ))
         self.pending_operations.append((
@@ -869,7 +899,13 @@ class WorkspaceManager(LegacyWorkspaceManager):
         if not self.live:
             self.pending_operations.append((
                 key,
-                super().upload_entities(etype, df, index),
+                partial_with_hound_context(
+                    self.initialize_hound(),
+                    super().upload_entities,
+                    etype,
+                    df,
+                    index
+                ),
                 getter
             ))
             self.pending_operations.append((
@@ -943,7 +979,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
         if not self.live:
             self.pending_operations.append((
                 key,
-                partial(
+                partial_with_hound_context(
+                    self.initialize_hound(),
                     self._df_upload_translation_layer,
                     super().update_entity_attributes,
                     etype,
@@ -984,7 +1021,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
             'idName': etype+'_set_id'
         }
         self.dirty.add('entity_types')
-        setter = partial(
+        setter = partial_with_hound_context(
+            self.initialize_hound(),
             super().update_entity_set,
             etype,
             set_id,
@@ -1079,7 +1117,11 @@ class WorkspaceManager(LegacyWorkspaceManager):
         if not self.live:
             self.pending_operations.append((
                 'workspace',
-                partial(super().update_attributes, attr_dict),
+                partial_with_hound_context(
+                    self.initialize_hound(),
+                    super().update_attributes,
+                    attr_dict
+                ),
                 partial(self.call_with_timeout, DEFAULT_LONG_TIMEOUT, firecloud.api.get_workspace, self.namespace, self.workspace)
             ))
         else:
@@ -1106,10 +1148,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
         self.dirty.add(key)
         if 'entity_types' not in self.cache:
             self.cache['entity_types'] = {}
-        self.cache['entity_types'][etype] = {
+        self.cache['entity_types']['participant'] = {
             'attributeNames': [*self.cache[key].columns],
             'count': len(self.cache[key]),
-            'idName': etype+'_id'
+            'idName': 'participant_id'
         }
         self.dirty.add('entity_types')
         if self.live:
@@ -1120,7 +1162,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         if not self.live:
             self.pending_operations.append((
                 key,
-                partial(super().upload_participants, participant_ids),
+                partial_with_hound_context(self.initialize_hound(), super().upload_participants, participant_ids),
                 partial(self._get_entities_internal, 'participant')
             ))
             self.pending_operations.append((
@@ -1473,7 +1515,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
         if not self.live:
             self.pending_operations.append((
                 key,
-                partial(
+                partial_with_hound_context(
+                    self.initialize_hound(),
                     self._update_participant_entities_internal,
                     etype,
                     column,
@@ -1793,19 +1836,19 @@ class WorkspaceManager(LegacyWorkspaceManager):
         Updates workspace attributes and all entity attributes
         """
         with self.initialize_hound().with_reason("<Automated> Synchronizing hound with Firecloud"):
-            with self.hound.batch():
-                self.hound.write_log_entry(
-                    'other',
-                    "Starting database sync with FireCloud"
-                )
-                print("Checking workspace attributes")
-                updates = {
-                    attr: self.attributes[attr]
-                    for attr, prov in self.attribute_provenance().items()
-                    if prov is None or isinstance(prov, ProvenanceConflict)
-                }
-                if len(updates):
-                    print("Updating", len(updates), "hound attribute records")
+            self.hound.write_log_entry(
+                'other',
+                "Starting database sync with FireCloud"
+            )
+            print("Checking workspace attributes")
+            updates = {
+                attr: self.attributes[attr]
+                for attr, prov in self.attribute_provenance().items()
+                if prov is None or isinstance(prov, ProvenanceConflict)
+            }
+            if len(updates):
+                print("Updating", len(updates), "hound attribute records")
+                with self.hound.batch():
                     self.hound.update_workspace_meta(
                         "Updating {} workspace attributes: {}".format(
                             len(updates),
@@ -1814,7 +1857,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     )
                     for k,v in updates.items():
                         self.hound.update_workspace_attribute(k, v)
-                for etype in self.entity_types:
+            for etype in self.entity_types:
+                with self.hound.batch():
                     print("Checking", etype, "attributes")
                     live_df = self._get_entities_internal(etype)
                     for eid, data in self.entity_provenance(etype, live_df).iterrows():
