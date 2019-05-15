@@ -837,7 +837,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         getter = partial(
             self.call_with_timeout,
             DEFAULT_LONG_TIMEOUT,
-            super().self.get_entities,
+            super().get_entities,
             etype
         )
         key = 'entities:'+etype
@@ -848,7 +848,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 self.cache[key] = self.cache[key].append(
                     df.loc[[k for k in df.index if k not in self.cache[key].index]]
                 )
-                self.cache[key].update(updates)
+                self.cache[key].update(df)
             self.dirty.add(key)
             if 'entity_types' not in self.cache:
                 self.cache['entity_types'] = {}

@@ -1130,7 +1130,12 @@ class LegacyWorkspaceManager(object):
                 data=np.c_[[set_id]*len(entity_ids), entity_ids],
                 columns=['membership:{}_set_id'.format(etype), '{}_id'.format(etype)]
             )
-            self.upload_entities('{}_set'.format(etype), set_df, index=False)
+            if len(set_df):
+                self.upload_entities('{}_set'.format(etype), set_df, index=False)
+            else:
+                # Upload empty set
+                set_df = pd.DataFrame(index=pd.Index([set_id], name='{}_set_id'.format(etype)))
+                self.upload_entities('{}_set'.format(etype), set_df)
             return True
         return False
 
