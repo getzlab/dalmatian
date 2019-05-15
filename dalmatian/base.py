@@ -167,34 +167,38 @@ class LegacyWorkspaceManager(object):
             else:
                 print('Successfully imported {} {}s.'.format(df.shape[0], et))
             if self.initialize_hound() is not None:
-                idx = df.index if index else (df[etype+'_id'] if etype+'_id' in df.columns else None)
-                self.hound.write_log_entry(
-                    "upload",
-                    "Uploaded {} {}s".format(
-                        len(df),
-                        etype
-                    ),
-                    entities=(
-                        [os.path.join(etype, eid) for eid in idx]
-                        if idx is not None
-                        else None
-                    )
-                )
-
-                if idx is not None:
-                    for eid, data in df.iterrows():
-                        self.hound.update_entity_meta(
-                            etype,
-                            eid,
-                            "User uploaded new entity"
+                with ExitStack() as stack:
+                    idx = df.index if index else (df[etype+'_id'] if etype+'_id' in df.columns else None)
+                    if len(df) > 100:
+                        print("Updating many hound records. Switching to batch updates")
+                        stack.enter_context(self.hound.batch())
+                    self.hound.write_log_entry(
+                        "upload",
+                        "Uploaded {} {}s".format(
+                            len(df),
+                            etype
+                        ),
+                        entities=(
+                            [os.path.join(etype, eid) for eid in idx]
+                            if idx is not None
+                            else None
                         )
-                        for attr, val in data.items():
-                            self.hound.update_entity_attribute(
+                    )
+
+                    if idx is not None:
+                        for eid, data in df.iterrows():
+                            self.hound.update_entity_meta(
                                 etype,
                                 eid,
-                                attr,
-                                val
+                                "User uploaded new entity"
                             )
+                            for attr, val in data.items():
+                                self.hound.update_entity_attribute(
+                                    etype,
+                                    eid,
+                                    attr,
+                                    val
+                                )
         else:
             raise APIException('{} import failed.'.format(et.capitalize()), s)
 
@@ -377,14 +381,17 @@ class LegacyWorkspaceManager(object):
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
         r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)
         if self.initialize_hound() is not None:
-            self.hound.update_workspace_meta(
-                "Updating {} workspace attributes: {}".format(
-                    len(attr_dict),
-                    ', '.join(attr_dict)
+            with ExitStack() as stack:
+                if len(attr_dict) > 100:
+                    stack.enter_context(self.hound.batch())
+                self.hound.update_workspace_meta(
+                    "Updating {} workspace attributes: {}".format(
+                        len(attr_dict),
+                        ', '.join(attr_dict)
+                    )
                 )
-            )
-            for k,v in attr_dict.items():
-                self.hound.update_workspace_attribute(k, v)
+                for k,v in attr_dict.items():
+                    self.hound.update_workspace_attribute(k, v)
         if r.status_code != 200:
             raise APIException(r)
         print('Successfully updated workspace attributes in {}/{}'.format(self.namespace, self.workspace))
@@ -1600,22 +1607,26 @@ class LegacyWorkspaceManager(object):
             else:
                 print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
             if self.initialize_hound() is not None:
-                for obj in attr_list:
-                    self.hound.update_entity_meta(
-                        etype,
-                        obj['name'],
-                        "Updating {} attributes: {}".format(
-                            len(obj['operations']),
-                            ', '.join(attr['attributeName'] for attr in obj['operations'])
-                        )
-                    )
-                    for attr in obj['operations']:
-                        self.hound.update_entity_attribute(
+                with ExitStack() as stack:
+                    if len(attr_list) > 100:
+                        print("Updating many hound records. Switching to batch updates")
+                        stack.enter_context(self.hound.batch())
+                    for obj in attr_list:
+                        self.hound.update_entity_meta(
                             etype,
                             obj['name'],
-                            attr['attributeName'],
-                            attr['addUpdateAttribute']
+                            "Updating {} attributes: {}".format(
+                                len(obj['operations']),
+                                ', '.join(attr['attributeName'] for attr in obj['operations'])
+                            )
                         )
+                        for attr in obj['operations']:
+                            self.hound.update_entity_attribute(
+                                etype,
+                                obj['name'],
+                                attr['attributeName'],
+                                attr['addUpdateAttribute']
+                            )
         elif r.status_code >= 400:
             raise APIException(r)
         else:

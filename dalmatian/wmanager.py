@@ -1793,48 +1793,49 @@ class WorkspaceManager(LegacyWorkspaceManager):
         Updates workspace attributes and all entity attributes
         """
         with self.initialize_hound().with_reason("<Automated> Synchronizing hound with Firecloud"):
-            self.hound.write_log_entry(
-                'other',
-                "Starting database sync with FireCloud"
-            )
-            print("Checking workspace attributes")
-            updates = {
-                attr: self.attributes[attr]
-                for attr, prov in self.attribute_provenance().items()
-                if prov is None or isinstance(prov, ProvenanceConflict)
-            }
-            if len(updates):
-                print("Updating", len(updates), "hound attribute records")
-                self.hound.update_workspace_meta(
-                    "Updating {} workspace attributes: {}".format(
-                        len(updates),
-                        ', '.join(updates)
-                    )
+            with self.hound.batch():
+                self.hound.write_log_entry(
+                    'other',
+                    "Starting database sync with FireCloud"
                 )
-                for k,v in updates.items():
-                    self.hound.update_workspace_attribute(k, v)
-            for etype in self.entity_types:
-                print("Checking", etype, "attributes")
-                live_df = self._get_entities_internal(etype)
-                for eid, data in self.entity_provenance(etype, live_df).iterrows():
-                    updates = {
-                        attr for attr, val in data.items()
-                        if val is None or isinstance(val, ProvenanceConflict)
-                    }
-                    if len(updates):
-                        print("Updating", len(updates), "attributes for", etype, eid)
-                        self.hound.update_entity_meta(
-                            etype,
-                            eid,
-                            "Updating {} attributes: {}".format(
-                                len(updates),
-                                ', '.join(updates)
-                            )
+                print("Checking workspace attributes")
+                updates = {
+                    attr: self.attributes[attr]
+                    for attr, prov in self.attribute_provenance().items()
+                    if prov is None or isinstance(prov, ProvenanceConflict)
+                }
+                if len(updates):
+                    print("Updating", len(updates), "hound attribute records")
+                    self.hound.update_workspace_meta(
+                        "Updating {} workspace attributes: {}".format(
+                            len(updates),
+                            ', '.join(updates)
                         )
-                        for attr in updates:
-                            self.hound.update_entity_attribute(
+                    )
+                    for k,v in updates.items():
+                        self.hound.update_workspace_attribute(k, v)
+                for etype in self.entity_types:
+                    print("Checking", etype, "attributes")
+                    live_df = self._get_entities_internal(etype)
+                    for eid, data in self.entity_provenance(etype, live_df).iterrows():
+                        updates = {
+                            attr for attr, val in data.items()
+                            if val is None or isinstance(val, ProvenanceConflict)
+                        }
+                        if len(updates):
+                            print("Updating", len(updates), "attributes for", etype, eid)
+                            self.hound.update_entity_meta(
                                 etype,
                                 eid,
-                                attr,
-                                live_df[attr][eid]
+                                "Updating {} attributes: {}".format(
+                                    len(updates),
+                                    ', '.join(updates)
+                                )
                             )
+                            for attr in updates:
+                                self.hound.update_entity_attribute(
+                                    etype,
+                                    eid,
+                                    attr,
+                                    live_df[attr][eid]
+                                )
