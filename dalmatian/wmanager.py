@@ -219,10 +219,13 @@ def capture(display=True):
             print(stdout_buff.read(), end='')
             stdout_buff.seek(0,0)
 
-def call_with_context(ctx, func, *args, **kwargs):
+def call_with_context(ctx, func, *args, _context_callable=False, **kwargs):
     """
     Returns the value of func(*args, **kwargs) within the context
+    Set '_context_callable=True' if your contextmanager needs to be called first
     """
+    if _context_callable:
+        ctx = ctx()
     with ctx:
         return func(*args, **kwargs)
 
@@ -233,12 +236,13 @@ def partial_with_hound_context(hound, func, *args, **kwargs):
     Useful for capturing the current contextual hound reason when queueing a background action
     """
     if hound is not None:
-        reason = hound.context_reason.reason if hasattr(hound.context_reason, 'reason') else None
+        reason = hound.get_current_reason()
         return partial(
             call_with_context,
-            hound.with_reason(reason),
+            partial(hound.with_reason, reason),
             func,
             *args,
+            _context_callable=True,
             **kwargs
         )
     return partial(
@@ -411,7 +415,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         this method takes over
         """
         identifier = '{}/{}'.format(config['namespace'], config['name'])
-        if self.initialize_hound() is not None:
+        if self.hound is not None:
             self.hound.write_log_entry(
                 'other',
                 "Uploaded/Updated method configuration: {}/{}".format(
@@ -552,7 +556,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         n_participants = len(participants)
 
         with contextlib.ExitStack() as stack:
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 stack.enter_context(self.hound.batch())
                 stack.enter_context(self.hound.with_reason("<Automated> Populating attribute from entity references"))
 
@@ -586,7 +590,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     break
 
             print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
-            
+
     @_synchronized
     @_read_from_cache(lambda self, namespace, name: 'config:{}/{}'.format(namespace, name))
     def _get_config_internal(self, namespace, name):
@@ -626,7 +630,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         rvalue = record.attributeValue if record is not None else None
         if isinstance(rvalue, np.ndarray):
             rvalue = list(rvalue)
-        if record is None or np.all(value == rvalue) or (pd.isna(value) and pd.isna(rvalue)):
+        if record is None or np.all(value == rvalue) or (np.all(pd.isna(value)) and np.all(pd.isna(rvalue))):
             return record
         return ProvenanceConflict(value, record)
 
@@ -820,7 +824,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.go_offline()
         self.pending_operations.append((
             None, # Dont worry about a getter. The config entry is exactly as it will appear in FC
-            partial_with_hound_context(self.initialize_hound(), self._upload_config, config),
+            partial_with_hound_context(self.hound, self._upload_config, config),
             None
         ))
         self.pending_operations.append((
@@ -900,7 +904,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.pending_operations.append((
                 key,
                 partial_with_hound_context(
-                    self.initialize_hound(),
+                    self.hound,
                     super().upload_entities,
                     etype,
                     df,
@@ -980,7 +984,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.pending_operations.append((
                 key,
                 partial_with_hound_context(
-                    self.initialize_hound(),
+                    self.hound,
                     self._df_upload_translation_layer,
                     super().update_entity_attributes,
                     etype,
@@ -1022,7 +1026,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         }
         self.dirty.add('entity_types')
         setter = partial_with_hound_context(
-            self.initialize_hound(),
+            self.hound,
             super().update_entity_set,
             etype,
             set_id,
@@ -1085,7 +1089,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             if isinstance(value, str) and os.path.isfile(value):
                 path = '{}/{}'.format(base_path, os.path.basename(value))
                 uploads.append(upload_to_blob(value, path))
-                if self.initialize_hound() is not None:
+                if self.hound is not None:
                     self.hound.write_log_entry(
                         'upload',
                         "Uploading new file to workspace: {} ({})".format(
@@ -1118,7 +1122,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.pending_operations.append((
                 'workspace',
                 partial_with_hound_context(
-                    self.initialize_hound(),
+                    self.hound,
                     super().update_attributes,
                     attr_dict
                 ),
@@ -1162,7 +1166,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         if not self.live:
             self.pending_operations.append((
                 key,
-                partial_with_hound_context(self.initialize_hound(), super().upload_participants, participant_ids),
+                partial_with_hound_context(self.hound, super().upload_participants, participant_ids),
                 partial(self._get_entities_internal, 'participant')
             ))
             self.pending_operations.append((
@@ -1225,7 +1229,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                         os.path.basename(value)
                     )
                     uploads.append(upload_to_blob(value, path))
-                    if self.initialize_hound() is not None:
+                    if self.hound is not None:
                         self.hound.write_log_entry(
                             'upload',
                             "Uploading new file to workspace: {} ({})".format(
@@ -1516,7 +1520,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.pending_operations.append((
                 key,
                 partial_with_hound_context(
-                    self.initialize_hound(),
+                    self.hound,
                     self._update_participant_entities_internal,
                     etype,
                     column,
@@ -1575,7 +1579,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 )
             )
             if result is not None:
-                if self.initialize_hound() is not None:
+                if self.hound is not None:
                     self.hound.update_workspace_meta(
                         "Updated ACL: {}".format(repr(acl))
                     )
@@ -1791,7 +1795,6 @@ class WorkspaceManager(LegacyWorkspaceManager):
         If Hound cannot find an entry for a given attribute, it will be recorded
         as None in the dictionary
         """
-        self.initialize_hound()
         return {
             attr: self._check_conflicting_value(
                 value,
@@ -1803,18 +1806,20 @@ class WorkspaceManager(LegacyWorkspaceManager):
             for attr, value in self.attributes.items()
         }
 
-    def entity_provenance(self, etype, df):
+    def entity_provenance(self, etype, df=None):
         """
         Maps the given df/series to contain provenance objects
         etype: The entity type
-        df: pd.DataFrame or pd.Series of entity metadata.
+        df: (optional) pd.DataFrame or pd.Series of entity metadata.
         For a series: Name must be entity_id, index must contain desired attributes
         For a dataframe: index must contain entity_ids, columns must contain desired attributes
+        If not provided, defaults to the entire entity dataframe for the entity type
         Return value will be of the same type and shape as the input df
         If hound cannot find an entry for a given attribute, it will be set to
         None in the output
         """
-        self.initialize_hound()
+        if df is None:
+            df = self._get_entities_internal(etype)
         if isinstance(df, pd.DataFrame):
             return df.copy().apply(
                 lambda row: pd.Series(data=self._build_provenance_series_internal(etype, row), index=row.index.copy(), name=row.name),
@@ -1835,7 +1840,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         live value.
         Updates workspace attributes and all entity attributes
         """
-        with self.initialize_hound().with_reason("<Automated> Synchronizing hound with Firecloud"):
+        with self.hound.with_reason("<Automated> Synchronizing hound with Firecloud"):
             self.hound.write_log_entry(
                 'other',
                 "Starting database sync with FireCloud"

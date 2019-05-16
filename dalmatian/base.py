@@ -81,26 +81,16 @@ class LegacyWorkspaceManager(object):
         self.timezone  = timezone
         self.__credentials = credentials
         self.__user_project = user_project
-        self.hound = None
+        self.__hound = None
 
-    def initialize_hound(self, credentials=None, user_project=None):
+    @property
+    def hound(self):
         """
         Initializes the HoundClient for the workspace, if it is None
-        credentials: (optional) google.cloud.auth.Credentials to use when
-        interacting with bucket, if not using default credentials
-        user_project: (optional) name of project to bill, if bucket is requester pays
         """
-        if credentials is None:
-            credentials = self.__credentials
-        if user_project is None:
-            user_project = self.__user_project
-        if self.hound is not None and credentials is None and user_project is None:
-            return self.hound
-        try:
-            self.hound = HoundClient(self.get_bucket_id(), credentials=credentials, user_project=user_project)
-        except:
-            traceback.print_exc()
-        return self.hound
+        if self.__hound is None:
+            self.__hound = HoundClient(self.get_bucket_id(), credentials=self.__credentials, user_project=self.__user_project)
+        return self.__hound
 
     def create_workspace(self, wm=None):
         """Create the workspace, or clone from another"""
@@ -108,7 +98,7 @@ class LegacyWorkspaceManager(object):
             r = firecloud.api.create_workspace(self.namespace, self.workspace)
             if r.status_code==201:
                 print('Workspace {}/{} successfully created.'.format(self.namespace, self.workspace))
-                if self.initialize_hound() is not None:
+                if self.hound is not None:
                         self.hound.update_workspace_meta("Created Empty Workspace")
                 return True
             else:
@@ -118,7 +108,7 @@ class LegacyWorkspaceManager(object):
             if r.status_code == 201:
                 print('Workspace {}/{} successfully cloned from {}/{}.'.format(
                     self.namespace, self.workspace, wm.namespace, wm.workspace))
-                if self.initialize_hound() is not None:
+                if self.hound is not None:
                         self.hound.update_workspace_meta("Cloned workspace from {}/{}".format(wm.namespace, wm.workspace))
                 return True
             else:
@@ -166,7 +156,7 @@ class LegacyWorkspaceManager(object):
                     print('  * {} ({} {}s)'.format(s, np.sum(sets==s), et.replace(' set','')))
             else:
                 print('Successfully imported {} {}s.'.format(df.shape[0], et))
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 with ExitStack() as stack:
                     idx = df.index if index else (df[etype+'_id'] if etype+'_id' in df.columns else None)
                     if len(df) > 100:
@@ -210,7 +200,7 @@ class LegacyWorkspaceManager(object):
             columns=['entity:participant_id']
         )
         self.upload_entities('participant', participant_df, index=False)
-        if self.initialize_hound() is not None:
+        if self.hound is not None:
             self.hound.write_log_entry(
                 "upload",
                 "Uploaded {} participants".format(
@@ -286,7 +276,7 @@ class LegacyWorkspaceManager(object):
             }
             attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
             r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 self.hound.update_entity_attribute(
                     'participant',
                     k,
@@ -297,7 +287,7 @@ class LegacyWorkspaceManager(object):
             if r.status_code != 200:
                 raise APIException(r)
         print('\n    Finished attaching {}s to {} participants'.format(etype, len(participant_ids)))
-        if self.initialize_hound() is not None:
+        if self.hound is not None:
             for pid in participant_ids:
                 self.hound.update_entity_meta(
                     'participant',
@@ -380,7 +370,7 @@ class LegacyWorkspaceManager(object):
         # attrs must be list:
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
         r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)
-        if self.initialize_hound() is not None:
+        if self.hound is not None:
             with ExitStack() as stack:
                 if len(attr_dict) > 100:
                     stack.enter_context(self.hound.batch())
@@ -888,7 +878,7 @@ class LegacyWorkspaceManager(object):
 
         """
         configs = self.list_configs()
-        if self.initialize_hound() is not None:
+        if self.hound is not None:
             self.hound.write_log_entry(
                 'other',
                 "Uploaded/Updated method configuration: {}/{}".format(
@@ -979,7 +969,7 @@ class LegacyWorkspaceManager(object):
         """Delete workspace configuration"""
         r = firecloud.api.delete_workspace_config(self.namespace, self.workspace, cnamespace, config)
         if r.status_code == 204:
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 self.hound.write_log_entry(
                     'other',
                     "Deleted method configuration: {}/{}".format(
@@ -1115,7 +1105,7 @@ class LegacyWorkspaceManager(object):
             if r.status_code == 200:
                 print('{} set "{}" ({} {}s) successfully updated.'.format(
                     etype.capitalize(), set_id, len(entity_ids), etype))
-                if self.initialize_hound() is not None:
+                if self.hound is not None:
                     self.hound.update_entity_meta(
                         etype+'_set',
                         set_id,
@@ -1185,7 +1175,7 @@ class LegacyWorkspaceManager(object):
         r = firecloud.api.update_entity(self.namespace, self.workspace, 'sample_set', super_set_id, attrs)
         if r.status_code == 200:
             print('Set of sample sets "{}" successfully created.'.format(super_set_id))
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 self.hound.update_entity_meta(
                     'sample_set',
                     super_set_id,
@@ -1263,7 +1253,7 @@ class LegacyWorkspaceManager(object):
         r = _batch_update_entities(self.namespace, self.workspace, attr_list)
         if r.status_code == 204:
             print(msg)
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 for obj in attr_list:
                     self.hound.update_entity_meta(
                         etype,
@@ -1316,7 +1306,7 @@ class LegacyWorkspaceManager(object):
         r = firecloud.api.delete_entity_type(self.namespace, self.workspace, etype, entity_ids)
         if r.status_code == 204:
             print('{}(s) {} successfully deleted.'.format(etype.replace('_set', ' set').capitalize(), entity_ids))
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 self.hound.write_log_entry(
                     'upload',
                     "Deleting {} {}s".format(
@@ -1349,7 +1339,7 @@ class LegacyWorkspaceManager(object):
         r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'sample', sample_ids)
         if r.status_code == 204:
             print('Sample(s) {} successfully deleted.'.format(sample_ids))
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 self.hound.write_log_entry(
                     'upload',
                     "Deleting {} samples".format(
@@ -1387,7 +1377,7 @@ class LegacyWorkspaceManager(object):
                     r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
                     if r.status_code != 200:
                         raise APIException(r)
-                    if self.initialize_hound() is not None:
+                    if self.hound is not None:
                         self.hound.update_entity_attribute(
                             'participant',
                             k,
@@ -1402,7 +1392,7 @@ class LegacyWorkspaceManager(object):
             for i,s in set_df['samples'].items():
                 if np.any([i in sample_id_set for i in s]):
                     with ExitStack() as stack:
-                        if self.initialize_hound() is not None:
+                        if self.hound is not None:
                             stack.enter_context(
                                 self.hound.with_reason("<Automated> Removing samples from sample_set prior to sample deletion")
                             )
@@ -1412,7 +1402,7 @@ class LegacyWorkspaceManager(object):
             r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'sample', sample_ids)
             if r.status_code == 204:
                 print('Sample(s) {} successfully deleted.'.format(sample_ids))
-                if self.initialize_hound() is not None:
+                if self.hound is not None:
                     self.hound.write_log_entry(
                         'upload',
                         "Deleting {} samples".format(
@@ -1446,7 +1436,7 @@ class LegacyWorkspaceManager(object):
         r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'participant', participant_ids)
         if r.status_code == 204:
             print('Participant(s) {} successfully deleted.'.format(participant_ids))
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 for pid in participant_ids:
                     self.hound.update_entity_meta(
                         'participant',
@@ -1458,7 +1448,7 @@ class LegacyWorkspaceManager(object):
                 r2 = firecloud.api.delete_entities(self.namespace, self.workspace, r.json())
                 if r2.status_code == 204:
                     print('Participant(s) {} and dependent entities successfully deleted.'.format(participant_ids))
-                    if self.initialize_hound() is not None:
+                    if self.hound is not None:
                         for entity in r.json():
                             self.hound.update_entity_meta(
                                 entity['entityType'],
@@ -1606,7 +1596,7 @@ class LegacyWorkspaceManager(object):
                 print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
             else:
                 print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 with ExitStack() as stack:
                     if len(attr_list) > 100:
                         print("Updating many hound records. Switching to batch updates")
@@ -1647,7 +1637,7 @@ class LegacyWorkspaceManager(object):
         if r.status_code == 201:
             submission_id = r.json()['submissionId']
             print('Successfully created submission {}.'.format(submission_id))
-            if self.initialize_hound() is not None:
+            if self.hound is not None:
                 self.hound.write_log_entry(
                     'job',
                     (
