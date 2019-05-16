@@ -367,6 +367,11 @@ class LegacyWorkspaceManager(object):
         """
         Set or update workspace attributes. Wrapper for API 'set' call
         """
+        attr_dict = {**attr_dict} # dicts are mutable. make a copy
+        for k in [*attr_dict]:
+            if 'library:' in k:
+                print("Refusing to update protected attribute '{}'; Set it manually in FireCloud".format(k))
+                del attr_dict[k]
         # attrs must be list:
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
         r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)

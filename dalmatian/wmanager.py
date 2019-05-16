@@ -1068,7 +1068,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
         """Get workspace attributes"""
         ws = self.firecloud_workspace
         if 'workspace' in ws and 'attributes' in ws['workspace']:
-            return ws['workspace']['attributes']
+            return {
+                key:val for key,val in ws['workspace']['attributes'].items()
+                if not key.startswith('library:')
+            }
         self.fail()
 
     @_synchronized
