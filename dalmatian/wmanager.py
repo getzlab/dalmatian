@@ -419,8 +419,8 @@ class WorkspaceManager(LegacyWorkspaceManager):
             self.hound.write_log_entry(
                 'other',
                 "Uploaded/Updated method configuration: {}/{}".format(
-                    json_body['namespace'],
-                    json_body['name']
+                    config['namespace'],
+                    config['name']
                 )
             )
         if identifier not in {'{}/{}'.format(c['namespace'], c['name']) for c in self.configs}:

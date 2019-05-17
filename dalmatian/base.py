@@ -1134,6 +1134,14 @@ class LegacyWorkspaceManager(object):
             )
             if len(set_df):
                 self.upload_entities('{}_set'.format(etype), set_df, index=False)
+                if self.hound is not None:
+                    self.hound.update_entity_attribute(
+                        '{}_set'.format(etype),
+                        set_id,
+                        '{}s'.format(etype),
+                        entity_ids,
+                        "Uploading new {}_set".format(etype)
+                    )
             else:
                 # Upload empty set
                 set_df = pd.DataFrame(index=pd.Index([set_id], name='{}_set_id'.format(etype)))
@@ -1602,10 +1610,7 @@ class LegacyWorkspaceManager(object):
             else:
                 print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
             if self.hound is not None:
-                with ExitStack() as stack:
-                    if len(attr_list) > 100:
-                        print("Updating many hound records. Switching to batch updates")
-                        stack.enter_context(self.hound.batch())
+                with self.hound.batch():
                     for obj in attr_list:
                         self.hound.update_entity_meta(
                             etype,
