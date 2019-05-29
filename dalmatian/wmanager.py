@@ -415,14 +415,13 @@ class WorkspaceManager(LegacyWorkspaceManager):
         this method takes over
         """
         identifier = '{}/{}'.format(config['namespace'], config['name'])
-        if self.hound is not None:
-            self.hound.write_log_entry(
-                'other',
-                "Uploaded/Updated method configuration: {}/{}".format(
-                    config['namespace'],
-                    config['name']
-                )
+        self.hound.write_log_entry(
+            'other',
+            "Uploaded/Updated method configuration: {}/{}".format(
+                config['namespace'],
+                config['name']
             )
+        )
         if identifier not in {'{}/{}'.format(c['namespace'], c['name']) for c in self.configs}:
             # new config
             r = firecloud.api.create_workspace_config(self.namespace, self.workspace, config)
@@ -555,39 +554,36 @@ class WorkspaceManager(LegacyWorkspaceManager):
 
         n_participants = len(participants)
 
-        with contextlib.ExitStack() as stack:
-            if self.hound is not None:
-                stack.enter_context(self.hound.batch())
-                stack.enter_context(self.hound.with_reason("<Automated> Populating attribute from entity references"))
+        with self.hound.batch():
+            with self.hound.with_reason("<Automated> Populating attribute from entity references"):
+                for attempt in range(5):
+                    retries = []
 
-            for attempt in range(5):
-                retries = []
+                    for k, status in status_bar.iter(update_participant(participants), len(participants), prepend="Updating {}s for participants ".format(etype)):
+                        if status >= 400:
+                            retries.append(k)
+                        else:
+                            self.hound.update_entity_meta(
+                                'participant',
+                                k,
+                                "Updated {} membership".format(column)
+                            )
+                            self.hound.update_entity_attribute(
+                                'participant',
+                                k,
+                                column,
+                                list(entities[k])
+                            )
 
-                for k, status in status_bar.iter(update_participant(participants), len(participants), prepend="Updating {}s for participants ".format(etype)):
-                    if status >= 400:
-                        retries.append(k)
-                    elif self.hound is not None:
-                        self.hound.update_entity_meta(
-                            'participant',
-                            k,
-                            "Updated {} membership".format(column)
-                        )
-                        self.hound.update_entity_attribute(
-                            'participant',
-                            k,
-                            column,
-                            list(entities[k])
-                        )
-
-                if len(retries):
-                    if attempt >= 4:
-                        print("\nThe following", len(retries), "participants could not be updated:", ', '.join(retries), file=sys.stderr)
-                        raise APIException("{} participants could not be updated after 5 attempts".format(len(retries)))
+                    if len(retries):
+                        if attempt >= 4:
+                            print("\nThe following", len(retries), "participants could not be updated:", ', '.join(retries), file=sys.stderr)
+                            raise APIException("{} participants could not be updated after 5 attempts".format(len(retries)))
+                        else:
+                            print("\nRetrying remaining", len(retries), "participants")
+                            participants = [item for item in retries]
                     else:
-                        print("\nRetrying remaining", len(retries), "participants")
-                        participants = [item for item in retries]
-                else:
-                    break
+                        break
 
             print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
 
@@ -1092,15 +1088,14 @@ class WorkspaceManager(LegacyWorkspaceManager):
             if isinstance(value, str) and os.path.isfile(value):
                 path = '{}/{}'.format(base_path, os.path.basename(value))
                 uploads.append(upload_to_blob(value, path))
-                if self.hound is not None:
-                    self.hound.write_log_entry(
-                        'upload',
-                        "Uploading new file to workspace: {} ({})".format(
-                            os.path.basename(value),
-                            byteSize(os.path.getsize(value))
-                        ),
-                        entities=['workspace.{}'.format(key)]
-                    )
+                self.hound.write_log_entry(
+                    'upload',
+                    "Uploading new file to workspace: {} ({})".format(
+                        os.path.basename(value),
+                        byteSize(os.path.getsize(value))
+                    ),
+                    entities=['workspace.{}'.format(key)]
+                )
                 attr_dict[key] = path
         if len(uploads):
             [callback() for callback in status_bar.iter(uploads, prepend="Uploading attributes ")]
@@ -1232,19 +1227,18 @@ class WorkspaceManager(LegacyWorkspaceManager):
                         os.path.basename(value)
                     )
                     uploads.append(upload_to_blob(value, path))
-                    if self.hound is not None:
-                        self.hound.write_log_entry(
-                            'upload',
-                            "Uploading new file to workspace: {} ({})".format(
-                                os.path.basename(value),
-                                byteSize(os.path.getsize(value))
-                            ),
-                            entities=['{}/{}.{}'.format(
-                                etype,
-                                row.name,
-                                i
-                            )]
-                        )
+                    self.hound.write_log_entry(
+                        'upload',
+                        "Uploading new file to workspace: {} ({})".format(
+                            os.path.basename(value),
+                            byteSize(os.path.getsize(value))
+                        ),
+                        entities=['{}/{}.{}'.format(
+                            etype,
+                            row.name,
+                            i
+                        )]
+                    )
                     row.iloc[i] = path
             return row
 
@@ -1582,10 +1576,9 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 )
             )
             if result is not None:
-                if self.hound is not None:
-                    self.hound.update_workspace_meta(
-                        "Updated ACL: {}".format(repr(acl))
-                    )
+                self.hound.update_workspace_meta(
+                    "Updated ACL: {}".format(repr(acl))
+                )
                 return result
         raise APIException("Failed to update the workspace ACL")
 
