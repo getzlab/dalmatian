@@ -403,8 +403,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
         Optionally provide a message describing the failure
         """
         if message is None:
-            message = "Insufficient data in cache to complete operation"
-        if self._last_result is not None:
+            message = ""
+        if not self.live:
+            message = "Workspace is offline and this request is not cached. Call 'WorkspaceManager.sync()' to go online. " + message 
+        if self._last_result is not None and self._last_result.status_code != 200:
             raise APIException(message, self._last_result)
         raise APIException(message)
 
