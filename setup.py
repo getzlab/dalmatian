@@ -1,3 +1,9 @@
+import sys
+if sys.version_info.major < 3 or sys.version_info.minor < 2:
+    raise ValueError("Dalmatian is only compatible with Python 3.3 and above")
+if sys.version_info.minor < 5:
+    import warnings
+    warnings.warn("Dalmatian may not function properly on Python < 3.5")
 import os
 import re
 from setuptools import setup, find_packages
@@ -18,22 +24,26 @@ setup(
     author = 'Broad Institute - Cancer Genome Computational Analysis',
     author_email = 'gdac@broadinstitute.org',
     long_description = _LONG_DESCRIPTION,
+    long_description_content_type = 'text/markdown',
     entry_points = {
         'console_scripts': [
             'dalmatian = dalmatian.core:main'
         ]
     },
     install_requires = [
-    'numpy',
-    'matplotlib',
-    'pandas',
-    'pytz',
-    'firecloud',
-    'ipython',
-    'iso8601'
+        'numpy',
+        'matplotlib',
+        'pandas',
+        'pytz',
+        'firecloud>=0.16.9',
+        'ipython',
+        'iso8601',
+        'google-cloud-storage>=1.13.2',
+        'agutil>=4.0.2',
+        'crayons>=0.2.0',
+        'hound>=0.1.8',
     ],
     classifiers = [
-        "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 3",
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
