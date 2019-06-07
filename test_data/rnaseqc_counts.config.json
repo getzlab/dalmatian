@@ -1,0 +1,32 @@
+{
+	"name": "rnaseqc_v2_cfg",
+	"methodRepoMethod": {
+		"methodName": "RNASeQC_v2",
+		"methodVersion": "latest",
+		"methodNamespace": "broad-firecloud-gtex"
+	},
+	"outputs": {
+		"rnaseqc_workflow.rnaseqc.metrics": "this.rnaseqc_metrics",
+		"rnaseqc_workflow.rnaseqc.gene_counts": "this.rnaseqc_gene_counts",
+		"rnaseqc_workflow.rnaseqc.insert_sizes": "this.rnaseqc_insert_sizes",
+		"rnaseqc_workflow.rnaseqc.coverage": "this.rnaseqc_gene_coverage",
+		"rnaseqc_workflow.rnaseqc.exon_counts": "this.rnaseqc_exon_counts",
+		"rnaseqc_workflow.rnaseqc.gene_tpm": "this.rnaseqc_gene_tpm"
+	},
+	"inputs": {
+		"rnaseqc_workflow.rnaseqc.num_preempt": "5",
+		"rnaseqc_workflow.rnaseqc.sample_id": "this.name",
+		"rnaseqc_workflow.rnaseqc.intervals_bed": "workspace.intervals_bed",
+		"rnaseqc_workflow.rnaseqc.bam_file": "this.star_md_bam_file",
+		"rnaseqc_workflow.rnaseqc.genes_gtf": "workspace.genes_gtf",
+		"rnaseqc_workflow.rnaseqc.disk_space": "25",
+		"rnaseqc_workflow.rnaseqc.flags": "\"--coverage -vv\"",
+		"rnaseqc_workflow.rnaseqc.memory": "3",
+		"rnaseqc_workflow.rnaseqc.num_threads": "1"
+	},
+	"rootEntityType": "sample",
+	"prerequisites": {},
+	"methodConfigVersion": 1,
+	"deleted": false,
+	"namespace": "aarong"
+}
