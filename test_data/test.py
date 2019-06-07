@@ -1,4 +1,3 @@
-import dalmatian
 import unittest
 import unittest.mock
 import json
@@ -7,6 +6,34 @@ from hashlib import md5
 import pandas as pd
 import contextlib
 import os
+import requests as reqs
+
+import firecloud.api
+
+# to avoid a credentials issue during online unittesting
+
+def _fiss_agent_header(headers=None):
+    """ Return request headers for fiss.
+        Inserts FISS as the User-Agent.
+        Initializes __SESSION if it hasn't been set.
+
+    Args:
+        headers (dict): Include additional headers as key-value pairs
+
+    """
+
+    if firecloud.api.__SESSION is None:
+        firecloud.api.__SESSION = reqs.session()
+
+    fiss_headers = {"User-Agent" : 'FISS/0.16.21'}
+    if headers is not None:
+        fiss_headers.update(headers)
+    return fiss_headers
+
+firecloud.api._fiss_agent_header = _fiss_agent_header
+
+import dalmatian
+
 
 relpath = os.path.dirname(__file__)
 
@@ -57,6 +84,11 @@ def no_op_ctx(*args, **kwargs):
     yield
 
 def mocked_request(method, url, data=None, headers=None, **kwargs):
+    # if 'Content-type' not in headers:
+    #     if 'json' in kwargs:
+    #         headers['Content-type'] =  'application/json'
+    #     if url.endswith('importEntities'):
+    #         headers['Content-type'] = 'application/x-www-form-urlencoded'
     key = makekey(method=method, url=url, data=data, headers=headers, kwargs=kwargs)
     if key in requests and len(requests[key]):
         response = requests[key].pop(0)

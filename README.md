@@ -1,6 +1,8 @@
 
 ## dalmatian
 
+[![Build Status](https://travis-ci.com/broadinstitute/dalmatian.svg?branch=master)](https://travis-ci.com/broadinstitute/dalmatian)
+
 [FISS](https://github.com/broadinstitute/fiss)' faithful companion.
 
 dalmatian is a collection of high-level functions for interacting with Firecloud via Pandas dataframes.
