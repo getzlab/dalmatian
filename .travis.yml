@@ -1,0 +1,13 @@
+language: python
+python:
+  - 3.4
+  - 3.5
+  - 3.6
+  - 3.7
+install:
+  - pip install -e .
+  - pip install coveralls
+script:
+  - coverage run --source=dalmatian --omit=*__init__.py -m unittest discover -v
+after_success:
+  - coveralls
