@@ -1561,19 +1561,43 @@ class LegacyWorkspaceManager(object):
           To update a single attribute for a single entity, use:
             pd.Series({entity_name:attr_value}, name=attr_name)
         """
+        if etype=='sample':
+            reserved_attrs = {'participant': 'participant'}
+        elif etype=='pair':
+            reserved_attrs = {'participant': 'participant','case_sample': 'sample','control_sample': 'sample'}
+        else:
+            reserved_attrs = {}
         if isinstance(attrs, pd.DataFrame):
             attr_list = []
             for i,row in attrs.iterrows():
                 attr_list.extend([{
                     'name':row.name,
                     'entityType':etype,
-                    'operations': [{"op": "AddUpdateAttribute", "attributeName": i, "addUpdateAttribute":str(j)} for i,j in row.iteritems() if not pd.isnull(j)]
+                    'operations': [
+                        {
+                            "op": "AddUpdateAttribute",
+                            "attributeName": i,
+                            "addUpdateAttribute": ({
+                                'entityType': reserved_attrs[i],
+                                'entityName': str(j)
+                            } if i in reserved_attrs else str(j))
+                        } for i,j in row.iteritems() if not pd.isnull(j)
+                    ]
                 }])
         elif isinstance(attrs, pd.Series):
             attr_list = [{
                 'name':i,
                 'entityType':etype,
-                'operations': [{"op": "AddUpdateAttribute", "attributeName":attrs.name, "addUpdateAttribute":str(j)}]
+                'operations': [
+                    {
+                        "op": "AddUpdateAttribute",
+                        "attributeName": attrs.name,
+                        "addUpdateAttribute": ({
+                            'entityType': reserved_attrs[attrs.name],
+                            'entityName': str(j)
+                        } if attrs.name in reserved_attrs else str(j))
+                    }
+                ]
             } for i,j in attrs.iteritems() if not pd.isnull(j)]
         else:
             raise ValueError('Unsupported input format.')
