@@ -594,6 +594,8 @@ class LegacyWorkspaceManager(object):
                                             attr = {output_map[i]:j for i,j in metadata['calls'][task][-1]['outputs'].items()}
                                             self.update_sample_attributes(sample_id, attr)
                                         task_counts[task.split('.')[-1]] += 1
+                except KeyError as e:
+                    raise KeyError("No sample {} in this submission".format(sample_id)) from e
                 except:
                     print('Metadata call failed for sample {}'.format(sample_id))
                     print(metadata.json())
@@ -1128,7 +1130,7 @@ class LegacyWorkspaceManager(object):
                     '{}_set'.format(etype),
                     set_id,
                     '{}s'.format(etype),
-                    entity_ids,
+                    [*entity_ids],
                     "Uploading new {}_set".format(etype)
                 )
             else:
