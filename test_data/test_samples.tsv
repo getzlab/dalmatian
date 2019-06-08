@@ -1,0 +1,4 @@
+sample_id	participant	bam_file	bam_index
+sample_1	participant_1	gs://bam/file/1	gs://bam/index/1
+sample_2	participant_2	gs://bam/file/2	gs://bam/index/2
+sample_3	participant_2	gs://bam/file/3	gs://bam/index/3

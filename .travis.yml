@@ -1,0 +1,17 @@
+language: python
+python:
+  - 3.5
+  - 3.6
+matrix:
+  include:
+    - python: 3.7
+      dist: xenial
+      sudo: true
+install:
+  - pip install -e .
+  - pip install firecloud==0.16.21
+  - pip install coveralls
+script:
+  - coverage run --source=dalmatian --omit=*__init__.py -m unittest discover test_data -v
+after_success:
+  - coveralls

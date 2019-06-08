@@ -403,8 +403,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
         Optionally provide a message describing the failure
         """
         if message is None:
-            message = "Insufficient data in cache to complete operation"
-        if self._last_result is not None:
+            message = ""
+        if not self.live:
+            message = "Workspace is offline and this request is not cached. Call 'WorkspaceManager.sync()' to go online. " + message
+        if self._last_result is not None and self._last_result.status_code != 200:
             raise APIException(message, self._last_result)
         raise APIException(message)
 
@@ -415,14 +417,13 @@ class WorkspaceManager(LegacyWorkspaceManager):
         this method takes over
         """
         identifier = '{}/{}'.format(config['namespace'], config['name'])
-        if self.hound is not None:
-            self.hound.write_log_entry(
-                'other',
-                "Uploaded/Updated method configuration: {}/{}".format(
-                    config['namespace'],
-                    config['name']
-                )
+        self.hound.write_log_entry(
+            'other',
+            "Uploaded/Updated method configuration: {}/{}".format(
+                config['namespace'],
+                config['name']
             )
+        )
         if identifier not in {'{}/{}'.format(c['namespace'], c['name']) for c in self.configs}:
             # new config
             r = firecloud.api.create_workspace_config(self.namespace, self.workspace, config)
@@ -549,45 +550,48 @@ class WorkspaceManager(LegacyWorkspaceManager):
             with set_timeout(DEFAULT_SHORT_TIMEOUT):
                 try:
                     r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', participant_id, attrs)
+                    if r.status_code != 200:
+                        # For debugging, keep _last_result updated
+                        self._last_result = r
                 except requests.ReadTimeout:
                     return participant_id, 500 # fake a bad status code to requeue
             return participant_id, r.status_code
 
         n_participants = len(participants)
 
-        with contextlib.ExitStack() as stack:
-            if self.hound is not None:
-                stack.enter_context(self.hound.batch())
-                stack.enter_context(self.hound.with_reason("<Automated> Populating attribute from entity references"))
+        with self.hound.batch():
+            with self.hound.with_reason("<Automated> Populating attribute from entity references"):
+                for attempt in range(5):
+                    retries = []
 
-            for attempt in range(5):
-                retries = []
+                    for k, status in status_bar.iter(update_participant(participants), len(participants), prepend="Updating {}s for participants ".format(etype)):
+                        if status >= 400:
+                            retries.append(k)
+                        else:
+                            self.hound.update_entity_meta(
+                                'participant',
+                                k,
+                                "Updated {} membership".format(column)
+                            )
+                            self.hound.update_entity_attribute(
+                                'participant',
+                                k,
+                                column,
+                                list(entities[k])
+                            )
 
-                for k, status in status_bar.iter(update_participant(participants), len(participants), prepend="Updating {}s for participants ".format(etype)):
-                    if status >= 400:
-                        retries.append(k)
-                    elif self.hound is not None:
-                        self.hound.update_entity_meta(
-                            'participant',
-                            k,
-                            "Updated {} membership".format(column)
-                        )
-                        self.hound.update_entity_attribute(
-                            'participant',
-                            k,
-                            column,
-                            list(entities[k])
-                        )
-
-                if len(retries):
-                    if attempt >= 4:
-                        print("\nThe following", len(retries), "participants could not be updated:", ', '.join(retries), file=sys.stderr)
-                        raise APIException("{} participants could not be updated after 5 attempts".format(len(retries)))
+                    if len(retries):
+                        if attempt >= 4:
+                            print("\nThe following", len(retries), "participants could not be updated:", ', '.join(retries), file=sys.stderr)
+                            raise APIException(
+                                "{} participants could not be updated after 5 attempts".format(len(retries)),
+                                self._last_result
+                            )
+                        else:
+                            print("\nRetrying remaining", len(retries), "participants")
+                            participants = [item for item in retries]
                     else:
-                        print("\nRetrying remaining", len(retries), "participants")
-                        participants = [item for item in retries]
-                else:
-                    break
+                        break
 
             print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
 
@@ -731,7 +735,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
             namespace = reference
         if decode_only:
             return namespace, name
-        return self._get_config_internal(namespace, name)
+        return {**self._get_config_internal(namespace, name)}
 
     get_configuration = get_config
 
@@ -1092,15 +1096,14 @@ class WorkspaceManager(LegacyWorkspaceManager):
             if isinstance(value, str) and os.path.isfile(value):
                 path = '{}/{}'.format(base_path, os.path.basename(value))
                 uploads.append(upload_to_blob(value, path))
-                if self.hound is not None:
-                    self.hound.write_log_entry(
-                        'upload',
-                        "Uploading new file to workspace: {} ({})".format(
-                            os.path.basename(value),
-                            byteSize(os.path.getsize(value))
-                        ),
-                        entities=['workspace.{}'.format(key)]
-                    )
+                self.hound.write_log_entry(
+                    'upload',
+                    "Uploading new file to workspace: {} ({})".format(
+                        os.path.basename(value),
+                        byteSize(os.path.getsize(value))
+                    ),
+                    entities=['workspace.{}'.format(key)]
+                )
                 attr_dict[key] = path
         if len(uploads):
             [callback() for callback in status_bar.iter(uploads, prepend="Uploading attributes ")]
@@ -1232,19 +1235,18 @@ class WorkspaceManager(LegacyWorkspaceManager):
                         os.path.basename(value)
                     )
                     uploads.append(upload_to_blob(value, path))
-                    if self.hound is not None:
-                        self.hound.write_log_entry(
-                            'upload',
-                            "Uploading new file to workspace: {} ({})".format(
-                                os.path.basename(value),
-                                byteSize(os.path.getsize(value))
-                            ),
-                            entities=['{}/{}.{}'.format(
-                                etype,
-                                row.name,
-                                i
-                            )]
-                        )
+                    self.hound.write_log_entry(
+                        'upload',
+                        "Uploading new file to workspace: {} ({})".format(
+                            os.path.basename(value),
+                            byteSize(os.path.getsize(value))
+                        ),
+                        entities=['{}/{}.{}'.format(
+                            etype,
+                            row.name,
+                            i
+                        )]
+                    )
                     row.iloc[i] = path
             return row
 
@@ -1403,10 +1405,9 @@ class WorkspaceManager(LegacyWorkspaceManager):
         through the FireCloud Rawls API. Use `WorkspaceManager.execute` to run
         jobs through the Lapdog Engine
         Accepts the following argument types for config:
-        1) config = {config JSON object} (will be uploaded if not present on the workspace)
-        2) config = "config namespace"
-        3) config = "config name" (Only if name is unique in the workspace)
-        4) config = "config namespace/config name"
+        1) config = {config JSON object} (only if it matches the live version)
+        2) config = "config name" (Only if name is unique in the workspace)
+        3) config = "config namespace/config name"
         """
         if not self.live:
             warnings.warn(
@@ -1417,12 +1418,11 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 )
             )
         if isinstance(config, dict):
-            # Auto upload a method configuration if it doesn't exist
+            # make sure configs match live version
             try:
                 # Bonus: Quick pre-check that the config exists
-                # If we intercept a ConfigNotFound, then upload the new configuration
                 cfg = self.get_config(config['namespace'], config['name'])
-                if 'inputs' in config and 'outputs' in config != cfg:
+                if 'inputs' in config and 'outputs' in config and config != cfg:
                     # Extra bonus: Maybe the full JSON we're holding is different than
                     # the config retrieved, meaning they are different versions
                     # It's best that we halt the procedure in that case, because we can't
@@ -1431,7 +1431,10 @@ class WorkspaceManager(LegacyWorkspaceManager):
                     print("Either upload the provided configuration, or use a different reference type to fetch the online version", file=sys.stderr)
                     raise ConfigNotUnique("Provided configuration did not match live version {}/{}".format(cfg['namespace'], cfg['name']))
             except ConfigNotFound:
-                self.update_config(config)
+                # Removed after v0.0.10: Configs are no longer auto-uploaded if not present
+                print("The provided configuration does not exist on Firecloud", file=sys.stderr)
+                print("Please explicitly upload it with `WorkspaceManager.update_configuration`", file=sys.stderr)
+                raise
         preflight = self.preflight(config, entity, expression, etype)
         if not preflight.result:
             raise ValueError(preflight.reason)
@@ -1582,10 +1585,9 @@ class WorkspaceManager(LegacyWorkspaceManager):
                 )
             )
             if result is not None:
-                if self.hound is not None:
-                    self.hound.update_workspace_meta(
-                        "Updated ACL: {}".format(repr(acl))
-                    )
+                self.hound.update_workspace_meta(
+                    "Updated ACL: {}".format(repr(acl))
+                )
                 return result
         raise APIException("Failed to update the workspace ACL")
 
