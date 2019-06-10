@@ -58,6 +58,8 @@ def set_timeout(n):
 getattr(firecloud.api, "_fiss_agent_header")()
 # Get the request method on the reusable user session
 __CORE_SESSION_REQUEST__ = getattr(firecloud.api, "__SESSION").request
+if hasattr(__CORE_SESSION_REQUEST__, '__wrapped__'):
+    __CORE_SESSION_REQUEST__ = __CORE_SESSION_REQUEST__.__wrapped__
 
 @wraps(__CORE_SESSION_REQUEST__)
 def _firecloud_api_timeout_wrapper(*args, **kwargs):
