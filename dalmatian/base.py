@@ -1016,7 +1016,8 @@ class LegacyWorkspaceManager(object):
     def get_samples(self):
         """Get DataFrame with samples and their attributes"""
         df = self.get_entities('sample')
-        df['participant'] = df['participant'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
+        if 'participant' in df:
+            df['participant'] = df['participant'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
         return df
 
 
