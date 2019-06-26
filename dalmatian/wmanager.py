@@ -194,6 +194,15 @@ def _read_from_cache(key, message=None):
                         self.cache[_key] = result
             # Return the cached value, if present
             if _key in self.cache and self.cache[_key] is not None:
+                if not self.live:
+                    print(
+                        crayons.red("WARNING:", bold=False),
+                        "Returning cached result".format(
+                            self.namespace,
+                            self.workspace
+                        ),
+                        file=sys.stderr
+                    )
                 return self.cache[_key]
             self.fail(message) # Fail otherwise
 
@@ -1188,6 +1197,38 @@ class WorkspaceManager(LegacyWorkspaceManager):
             except:
                 pass
 
+    @_synchronized
+    def delete_config(self, cnamespace, config=None):
+        """
+        Delete workspace configuration
+        """
+        cfg = self.get_config(cnamespace, config)
+        identifier = '{}/{}'.format(config['namespace'], config['name'])
+        key = 'config:' + identifier
+        if key in self.cache:
+            del self.cache[key]
+        self.cache[key] = config # add full config object to cache
+        self.cache['configs'] = [
+            entry for entry in self.configs
+            if entry['namespace'] != cfg['namespace'] and entry['name'] != cfg['name']
+        ]
+        self.dirty.add('configs')
+        if self.live:
+            try:
+                return super().delete_config(cfg['namespace'], cfg['name'])
+            except:
+                self.go_offline()
+        self.pending_operations.append((
+            None,
+            partial(super().delete_config, cfg['namespace'], cfg['name']),
+            None
+        ))
+        self.pending_operations.append((
+            'configs',
+            None,
+            self._configs_live_update
+        ))
+
     # =============
     # Properties
     # =============
@@ -1794,6 +1835,12 @@ class WorkspaceManager(LegacyWorkspaceManager):
             workflow_status_df['start_time'] = [iso8601.parse_date(metadata_dict[i]['start']).astimezone(pytz.timezone(self.timezone)).strftime('%H:%M') for i in workflow_status_df.index]
 
         return workflow_status_df, task_dfs
+
+    def copy_config(self, wm, cnamespace, config=None):
+        """
+        Copy configuration from another workspace
+        """
+        self.update_config(wm.get_config(cnamespace, config))
 
     def attribute_provenance(self):
         """

@@ -16,6 +16,7 @@ from hound import HoundClient
 import warnings
 from contextlib import ExitStack
 import traceback
+import sys
 
 #------------------------------------------------------------------------------
 #  Extension of firecloud.api functionality using the rawls (internal) API
@@ -98,7 +99,10 @@ class LegacyWorkspaceManager(object):
             r = firecloud.api.create_workspace(self.namespace, self.workspace)
             if r.status_code==201:
                 print('Workspace {}/{} successfully created.'.format(self.namespace, self.workspace))
-                self.hound.update_workspace_meta("Created Empty Workspace")
+                try:
+                    self.hound.update_workspace_meta("Created Empty Workspace")
+                except:
+                    print("Unable to write initial hound record", file=sys.stderr)
                 return True
             else:
                 raise APIException("Failed to create Workspace", r)
@@ -107,7 +111,10 @@ class LegacyWorkspaceManager(object):
             if r.status_code == 201:
                 print('Workspace {}/{} successfully cloned from {}/{}.'.format(
                     self.namespace, self.workspace, wm.namespace, wm.workspace))
-                self.hound.update_workspace_meta("Cloned workspace from {}/{}".format(wm.namespace, wm.workspace))
+                try:
+                    self.hound.update_workspace_meta("Cloned workspace from {}/{}".format(wm.namespace, wm.workspace))
+                except:
+                    print("Unable to write initial hound record", file=sys.stderr)
                 return True
             else:
                 raise APIException("Failed to clone Workspace", r)
@@ -905,7 +912,7 @@ class LegacyWorkspaceManager(object):
                 print(r.text)
 
 
-    def copy_config(self, wm, cnamespace, config=None):
+    def copy_config(self, wm, cnamespace, config):
         """Copy configuration from another workspace"""
         self.update_config(wm.get_config(cnamespace, config))
 
