@@ -1589,7 +1589,7 @@ class LegacyWorkspaceManager(object):
                                 'entityType': reserved_attrs[i],
                                 'entityName': str(j)
                             } if i in reserved_attrs else str(j))
-                        } for i,j in row.iteritems() if not pd.isnull(j)
+                        } for i,j in row.iteritems() if not np.any(pd.isnull(j))
                     ]
                 }])
         elif isinstance(attrs, pd.Series):
@@ -1606,7 +1606,7 @@ class LegacyWorkspaceManager(object):
                         } if attrs.name in reserved_attrs else str(j))
                     }
                 ]
-            } for i,j in attrs.iteritems() if not pd.isnull(j)]
+            } for i,j in attrs.iteritems() if not np.any(pd.isnull(j))]
         else:
             raise ValueError('Unsupported input format.')
 

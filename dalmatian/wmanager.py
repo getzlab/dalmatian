@@ -494,7 +494,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
                         break
                 if name not in selector:
                     # Apply the manual translated update to this row
-                    translations |= self.__df_upload_translation_layer_internal(func, workspace, etype, data)
+                    translations |= self.__df_upload_translation_layer_internal(func, etype, data)
             func(etype, updates.loc[[*selector]], *args)
         else:
             response = self.__patch(
