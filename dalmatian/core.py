@@ -296,7 +296,7 @@ def fetch_method(reference, name=None, version=None, *args, decode_only=False):
     Fetches a single method JSON object given a variety of possible inputs:
     1) reference = {method configuration JSON}
     2) reference = {method JSON}
-    3) reference = "method namespace", name = "method name", (optional) verison = "method version"
+    3) reference = "method namespace", name = "method name", (optional) version = "method version"
     4) reference = "method namespace/method name"
     5) reference = "method namespace/method name/method version"
     """
@@ -593,7 +593,7 @@ def autofill_config_template(namespace, method=None, *args, version=None, workfl
     methods = [i.split(':')[-1].split('/')[0] for i in wdls]
     # attempt to get configurations for all methods
     configs = {}
-    for k,m in enumerate(methods,1):
+    for k,m in enumerate(methods, 1):
         print('\r  * importing configuration {}/{}'.format(k, len(methods)), end='')
         try:
             configs[m] = get_config_json(method['namespace'], m+'_cfg')
@@ -604,13 +604,15 @@ def autofill_config_template(namespace, method=None, *args, version=None, workfl
     # parse out inputs/outputs
     inputs = {}
     for c in configs:
-        for i in configs[c]['inputs']:
-            inputs['.'.join(i.split('.')[1:])] = configs[c]['inputs'][i]
+        config_inputs = json.loads(configs[c]['payload'])['inputs']
+        for i in config_inputs:
+            inputs['.'.join(i.split('.')[1:])] = config_inputs[i]
 
     outputs = {}
     for c in configs:
-        for i in configs[c]['outputs']:
-            outputs['.'.join(i.split('.')[1:])] = configs[c]['outputs'][i]
+        config_outputs = json.loads(configs[c]['payload'])['outputs']
+        for i in config_outputs:
+            outputs['.'.join(i.split('.')[1:])] = config_outputs[i]
 
     # populate template
     for i in attr['inputs']:
@@ -766,6 +768,14 @@ def update_method(namespace, method, synopsis, wdl_file, public=False, delete_ol
 #------------------------------------------------------------------------------
 # VM costs
 #------------------------------------------------------------------------------
+def get_custom_vm_cost(cpus, memory_gb, preemptible=True):
+    """Prices from https://cloud.google.com/custom-machine-types/"""
+    if preemptible:
+        return 0.00698*cpus + 0.00094*memory_gb
+    else:
+        return 0.033174*cpus + 0.004446*memory_gb
+
+
 def get_vm_cost(machine_type, preemptible=True):
     """
     Cost per hour
