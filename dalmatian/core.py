@@ -878,7 +878,9 @@ def copyblob(src, dest, credentials=None, user_project=None):
         src = getblob(src, credentials, user_project)
     if isinstance(dest, str):
         dest = getblob(dest, credentials, user_project)
-    src.bucket.copy_blob(src, dest.bucket, dest.name)
+    token, progress, total = dest.rewrite(src)
+    while token is not None:
+        token, progress, total = dest.rewrite(src, token)
     return dest.exists()
 
 def moveblob(src, dest, credentials=None, user_project=None):

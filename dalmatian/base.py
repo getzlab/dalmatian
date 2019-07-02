@@ -93,6 +93,20 @@ class LegacyWorkspaceManager(object):
             self.__hound = HoundClient(self.get_bucket_id(), credentials=self.__credentials, user_project=self.__user_project)
         return self.__hound
 
+    def disable_hound(self):
+        """
+        Disables the hound client
+        """
+        self.hound.disable()
+        return self
+
+    def enable_hound(self):
+        """
+        Re-enables the hound client
+        """
+        self.hound.enable()
+        return self
+
     def create_workspace(self, wm=None):
         """Create the workspace, or clone from another"""
         if wm is None:
@@ -1031,9 +1045,12 @@ class LegacyWorkspaceManager(object):
     def get_pairs(self):
         """Get DataFrame with pairs and their attributes"""
         df = self.get_entities('pair')
-        df['participant'] = df['participant'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
-        df['case_sample'] = df['case_sample'].apply(lambda  x: x['entityName'] if isinstance(x, dict) else x)
-        df['control_sample'] = df['control_sample'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
+        if 'participant' in df:
+            df['participant'] = df['participant'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
+        if 'case_sample' in df:
+            df['case_sample'] = df['case_sample'].apply(lambda  x: x['entityName'] if isinstance(x, dict) else x)
+        if 'control_sample' in df:
+            df['control_sample'] = df['control_sample'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
         return df
 
 
@@ -1067,7 +1084,7 @@ class LegacyWorkspaceManager(object):
     def get_pair_sets(self):
         """Get DataFrame with sample sets and their attributes"""
         df = self.get_entities('pair_set')
-        df['pairs'] = df['pairs'].apply(lambda x: [i['entityName'] for i in x] if isinstance(x, list) and np.all(pd.notnull(x)) else x)
+        df['pairs'] = df['pairs'].apply(lambda x: [i['entityName'] if 'entityName' in i else i for i in x] if isinstance(x, list) and np.all(pd.notnull(x)) else x)
 
         # # convert JSON to table
         # columns = np.unique([k for s in df for k in s['attributes'].keys()])

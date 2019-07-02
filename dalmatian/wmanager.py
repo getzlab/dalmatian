@@ -704,9 +704,11 @@ class WorkspaceManager(LegacyWorkspaceManager):
     @_read_from_cache('configs')
     def list_configs(self):
         """List configurations in workspace"""
-        return self.tentative_json(firecloud.api.list_workspace_configs(
-            self.namespace,
-            self.workspace
+        return self.tentative_json(getattr(firecloud.api, '__SESSION').get(
+            'https://api.firecloud.org/api/workspaces/{}/{}/methodconfigs?allRepos=true'.format(
+                self.namespace,
+                self.workspace
+            )
         ))
 
     def get_config(self, reference, name=None, *args, decode_only=False):
