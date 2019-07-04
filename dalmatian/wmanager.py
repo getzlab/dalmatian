@@ -778,24 +778,29 @@ class WorkspaceManager(LegacyWorkspaceManager):
         """
         if "namespace" not in config or "name" not in config:
             raise ValueError("Config missing required keys 'namespace' and 'name'")
-        mnamespace = config['methodRepoMethod']['methodNamespace']
-        mname = config['methodRepoMethod']['methodName']
-        if wdl is not None:
-            with contextlib.ExitStack() as stack:
-                if not os.path.isfile(wdl):
-                    tmp = tempfile.NamedTemporaryFile('w', suffix='.wdl')
-                    stack.enter_context(tmp)
-                    tmp.write(wdl)
-                    wdl = tmp.name
-                if synopsis is None:
-                    synopsis = "Runs " + mname
-                update_method(mnamespace, mname, synopsis, wdl, delete_old=False)
-                time.sleep(5)
-        if config['methodRepoMethod']['methodVersion'] == 'latest':
-            config['methodRepoMethod']['methodVersion'] = get_method_version(
-                mnamespace,
-                mname
-            )
+        if 'methodNamespace' in config['methodRepoMethod']:
+            mnamespace = config['methodRepoMethod']['methodNamespace']
+            mname = config['methodRepoMethod']['methodName']
+            if wdl is not None:
+                with contextlib.ExitStack() as stack:
+                    if not os.path.isfile(wdl):
+                        tmp = tempfile.NamedTemporaryFile('w', suffix='.wdl')
+                        stack.enter_context(tmp)
+                        tmp.write(wdl)
+                        wdl = tmp.name
+                    if synopsis is None:
+                        synopsis = "Runs " + mname
+                    update_method(mnamespace, mname, synopsis, wdl, delete_old=False)
+                    time.sleep(5)
+            if config['methodRepoMethod']['methodVersion'] == 'latest':
+                config['methodRepoMethod']['methodVersion'] = get_method_version(
+                    mnamespace,
+                    mname
+                )
+        elif not ('sourceRepo' in config['methodRepoMethod'] and config['methodRepoMethod']['sourceRepo'] == 'dockstore'):
+            raise TypeError("methodNamespace not provided for agora method")
+        elif wdl is not None:
+            raise TypeError("Cannot provide a wdl for dockstore methods")
         identifier = '{}/{}'.format(config['namespace'], config['name'])
         key = 'config:' + identifier
         self.cache[key] = config # add full config object to cache
@@ -1205,7 +1210,7 @@ class WorkspaceManager(LegacyWorkspaceManager):
         Delete workspace configuration
         """
         cfg = self.get_config(cnamespace, config)
-        identifier = '{}/{}'.format(config['namespace'], config['name'])
+        identifier = '{}/{}'.format(cfg['namespace'], cfg['name'])
         key = 'config:' + identifier
         if key in self.cache:
             del self.cache[key]
