@@ -83,7 +83,7 @@ try:
     getattr(firecloud.api, "__SESSION").request = _firecloud_api_timeout_wrapper
 except:
     traceback.print_exc()
-    print(crayons.Red("Error:", bold=True), "Unable to apply timeout wrapper", file=sys.stderr)
+    print(crayons.red("Error:", bold=True), "Unable to apply timeout wrapper", file=sys.stderr)
 
 #------------------------------------------------------------------------------
 #  Top-level classes representing workspace(s)
