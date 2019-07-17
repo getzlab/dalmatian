@@ -55,31 +55,35 @@ def set_timeout(n):
         timeout_state.timeout = old_timeout
 
 # Generate the fiss agent header
-getattr(firecloud.api, "_fiss_agent_header")()
-# Get the request method on the reusable user session
-__CORE_SESSION_REQUEST__ = getattr(firecloud.api, "__SESSION").request
-if hasattr(__CORE_SESSION_REQUEST__, '__wrapped__'):
-    __CORE_SESSION_REQUEST__ = __CORE_SESSION_REQUEST__.__wrapped__
+try:
+    getattr(firecloud.api, "_fiss_agent_header")()
+    # Get the request method on the reusable user session
+    __CORE_SESSION_REQUEST__ = getattr(firecloud.api, "__SESSION").request
+    if hasattr(__CORE_SESSION_REQUEST__, '__wrapped__'):
+        __CORE_SESSION_REQUEST__ = __CORE_SESSION_REQUEST__.__wrapped__
 
-@wraps(__CORE_SESSION_REQUEST__)
-def _firecloud_api_timeout_wrapper(*args, **kwargs):
-    """
-    Wrapped version of the fiss reusable session request method
-    Applies a default timeout based on the current thread's timeout value
-    Default timeout can be overridden by kwargs
-    """
-    if not hasattr(timeout_state, 'timeout'):
-        timeout_state.timeout = None
-    return __CORE_SESSION_REQUEST__(
-        *args,
-        **{
-            **{'timeout': timeout_state.timeout},
-            **kwargs
-        }
-    )
+    @wraps(__CORE_SESSION_REQUEST__)
+    def _firecloud_api_timeout_wrapper(*args, **kwargs):
+        """
+        Wrapped version of the fiss reusable session request method
+        Applies a default timeout based on the current thread's timeout value
+        Default timeout can be overridden by kwargs
+        """
+        if not hasattr(timeout_state, 'timeout'):
+            timeout_state.timeout = None
+        return __CORE_SESSION_REQUEST__(
+            *args,
+            **{
+                **{'timeout': timeout_state.timeout},
+                **kwargs
+            }
+        )
 
-# Monkey Patch the wrapped request method
-getattr(firecloud.api, "__SESSION").request = _firecloud_api_timeout_wrapper
+    # Monkey Patch the wrapped request method
+    getattr(firecloud.api, "__SESSION").request = _firecloud_api_timeout_wrapper
+except:
+    traceback.print_exc()
+    print(crayons.Red("Error:", bold=True), "Unable to apply timeout wrapper", file=sys.stderr)
 
 #------------------------------------------------------------------------------
 #  Top-level classes representing workspace(s)
