@@ -62,9 +62,6 @@ class ConfigNotUnique(KeyError):
 class MethodNotFound(KeyError):
     pass
 
-class MethodNotUnique(KeyError):
-    pass
-
 #------------------------------------------------------------------------------
 #  Helper functions for processing timestamps
 #------------------------------------------------------------------------------
@@ -291,79 +288,157 @@ def list_workspaces():
     else:
         print(r.text)
 
-def fetch_method(reference, name=None, version=None, *args, decode_only=False):
-    """
-    Fetches a single method JSON object given a variety of possible inputs:
-    1) reference = {method configuration JSON}
-    2) reference = {method JSON}
-    3) reference = "method namespace", name = "method name", (optional) version = "method version"
-    4) reference = "method namespace/method name"
-    5) reference = "method namespace/method name/method version"
-    """
-    if len(args):
-        raise TypeError("decode_only is a keyword-only argument")
-    if isinstance(reference, dict):
-        # it's a config or method object
-        if "name" in reference and "snapshotId" in reference:
-            if decode_only:
-                return (reference['namespace'], reference['name'], reference['snapshotId'])
-            if 'managers' in reference and 'public' in reference and 'payload' in reference:
-                return reference #because it's already a method
-            else:
-                return fetch_method(reference['namespace'], reference['name'], reference['snapshotId'])
-        if "methodRepoMethod" in reference:
-            reference = reference['methodRepoMethod']
-        version = (
-            reference['methodVersion']
-            if reference['methodVersion'] != 'latest'
-            else None
-        )
-        namespace = reference['methodNamespace']
-        name = reference['methodName']
-    elif name is None:
-        # Just one argument
-        data = reference.split('/')
-        if len(data) == 1:
-            # Just a name
-            methods = list_methods().query('name == "{}"'.format(data[0]))
-            try:
-                methods = methods.loc[methods.groupby('namespace').idxmax('snapshotId').snapshotId]
-            except AttributeError as e:
-                raise MethodNotFound("No method by name '{}'".format(data[0])) from e
-            if len(methods) > 1:
-                raise MethodNotUnique("Found more than one method with name '{}'. Must provide a namespace".format(data[0]))
-            if len(methods) == 0:
-                raise MethodNotFound("No method by name '{}'".format(data[0]))
-            methods = methods.iloc[0]
-            namespace = methods['namespace']
-            name = methods['name']
-            # Even though a version was not provided by the user
-            # we found the latest snapshot as a byproduct of the search
-            version = methods['snapshotId']
-        elif len(data) >= 2:
-            # namespace / name
-            namespace = data[0]
-            name = data[1]
-            if len(data) == 3:
-                version = data[2]
-            elif len(data) > 3:
-                raise TypeError("Unable to determine argument configuration from {}".format(reference))
-    else:
-        namespace = reference
-    if decode_only:
-        return (namespace, name, version)
-    if version is None:
-        version = _get_method_version_internal(namespace, name)
-    response = firecloud.api.get_repository_method(namespace, name, version)
-    if response.status_code == 404:
-        raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
-    elif response.status_code >= 400:
-        raise APIException("Failed to get method", response)
-    return response.json()
 
+@lru_cache(16)
+def decode_method(reference, decode_only=False):
+    """
+    Breaks down a method reference to its components
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    """
+    data = reference.split('/')
+    if len(data) == 2:
+        # Get the version
+        namespace, name = data
+        return namespace, name, None if decode_only else _get_method_version_internal(namespace, name)
+    elif len(data) == 3:
+        namespace, name, version = data
+        return namespace, name, int(version)
+    raise ValueError("Method reference must be in format 'namespace/name' or 'namespace/name/version'")
+
+    # response = firecloud.api.get_repository_method(namespace, name, version)
+    # if response.status_code == 404:
+    #     raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
+    # elif response.status_code >= 400:
+    #     raise APIException("Failed to get method", response)
+    # return response.json()
+
+# NOTE: [ATTN] uses legacy call syntax
 def list_methods(namespace=None, name=None):
-    """List all methods in the repository"""
+    """
+    List all methods in the repository
+    """
     r = firecloud.api.list_repository_methods()
+    if r.status_code != 200:
+        raise APIException("Unable to list methods", r)
+    r = r.json()
+
+    if namespace is not None:
+        r = [m for m in r if m['namespace']==namespace]
+    if name is not None:
+        r = [m for m in r if m['name']==name]
+
+    df = pd.DataFrame(r)
+    if len(df):
+        return df.sort_values(['name', 'snapshotId'])
+    return df
+
+
+def _get_method_internal(namespace, name):
+    """
+    Internal Use.
+    Get all available versions of a method from the repository
+    """
+    r = firecloud.api.list_repository_methods()
+    if r.status_code != 200:
+        raise APIException(r)
+    r = r.json()
+    r = [m for m in r if m['name']==name and m['namespace']==namespace]
+    if len(r) == 0:
+        raise MethodNotFound("No such method {}/{}".format(namespace, name))
+    return r
+
+def get_method(reference):
+    """
+    Get all available versions of a method from the repository
+    Takes arguments in any of the following formats:
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    """
+    # Decode only because we're going to list methods, so we just need it to parse the arguments
+    namespace, name, version = decode_method(reference, decode_only=True)
+    return _get_method_internal(namespace, name)
+
+
+def get_method_metadata(reference):
+    """
+    Gets the metadata (including wdl) of a method
+    Takes any valid method reference format:
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    """
+    namespace, name, version = decode_method(reference)
+    r = firecloud.api.get_repository_method(namespace, name, version)
+    if r.status_code == 404:
+        raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
+    elif r.status_code != 200:
+        raise APIException("Unable to fetch method metadata", r)
+    return r.json()
+
+
+def _get_method_version_internal(namespace, name):
+    """
+    Internal Use.
+    Get latest method version
+    """
+    r = _get_method_internal(namespace, name)
+    if len(r) == 0:
+        raise MethodNotFound("No such method {}/{}".format(namespace, name))
+    return int(np.max([m['snapshotId'] for m in r]))
+
+def get_method_version(reference):
+    """
+    Gets the latest method version
+    Takes arguments in any of the following formats:
+    1) reference = "namespace/name/version" (Note: version is ignored in this case)
+    2) reference = "namespace/name"
+    """
+    # Decode only because we're going to list methods, so we just need it to parse the arguments
+    namespace, name, version = fetch_method(reference, decode_only=True)
+    return _get_method_version_internal(namespace, name)
+
+
+@lru_cache(16)
+def decode_config(reference, decode_only=False):
+    """
+    fetches a config json given a variety of reference formats
+    Note: This method only fetches public configurations. You must use a workspacemanager
+    to fetch configurations from a workspace
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    3) reference = "name"
+    """
+    data = reference.split('/')
+    if len(data) == 1:
+        # only name, so we need to list configurations
+        configs = list_configs(name=reference)
+        try:
+            configs = configs.loc[configs.groupby('namespace').idxmax('snapshotId').snapshotId]
+        except AttributeError as e:
+            raise ConfigNotFound("No config by name '{}'".format(reference)) from e
+        if len(configs) > 1:
+            raise ConfigNotUnique("Found more than one config with name '{}'. Must provide a namespace".format(reference))
+        if len(configs) == 0:
+            raise ConfigNotFound("No config by name '{}'".format(reference))
+        configs = configs.iloc[0]
+        # Even though a version was not provided by the user
+        # we found the latest snapshot as a byproduct of the search
+        return configs['namespace'], configs['name'], configs['snapshotId']
+    elif len(data) == 2:
+        namespace, name = data
+        return namespace, name, None if decode_only else _get_config_version_internal(namespace, name)
+    elif len(data) == 3:
+        namespace, name, version = data
+        return namespace, name, int(version)
+    raise ValueError("Config reference not in acceptable format")
+
+
+# NOTE: [ATTN] uses legacy call syntax
+def list_configs(namespace=None, name=None):
+    """
+    List all configurations in the repository
+    """
+    r = firecloud.api.list_repository_configs()
     if r.status_code != 200:
         raise APIException(r)
     r = r.json()
@@ -373,129 +448,17 @@ def list_methods(namespace=None, name=None):
     if name is not None:
         r = [m for m in r if m['name']==name]
 
-    return pd.DataFrame(r).sort_values(['name', 'snapshotId'])
-
-
-def _get_method_internal(namespace, name):
-    """Get all available versions of a method from the repository"""
-    r = firecloud.api.list_repository_methods()
-    if r.status_code != 200:
-        raise APIException(r)
-    r = r.json()
-    r = [m for m in r if m['name']==name and m['namespace']==namespace]
-    return r
-
-def get_method(namespace, name=None):
-    """
-    Get all available versions of a method from the repository
-    Takes arguments in any of the following formats:
-    1) namespace = {method configuration JSON}
-    2) namespace = {method JSON}
-    3) namespace = "method namespace", name = "method name"
-    4) namespace = "method namespace/method name"
-    """
-    # Decode only because we're going to list methods, so we just need it to parse the arguments
-    namespace, name, version = fetch_method(namespace, name, decode_only=True)
-    return _get_method_internal(namespace, name)
-
-
-
-def _get_method_version_internal(namespace, name):
-    """Get latest method version"""
-    r = _get_method_internal(namespace, name)
-    if len(r) == 0:
-        raise MethodNotFound("No such method {}/{}".format(namespace, name))
-    return int(np.max([m['snapshotId'] for m in r]))
-
-def get_method_version(namespace, name=None):
-    """
-    Gets the latest method version
-    Takes arguments in any of the following formats:
-    1) namespace = {method configuration JSON}
-    2) namespace = {method JSON}
-    3) namespace = "method namespace", name = "method name"
-    4) namespace = "method namespace/method name"
-    """
-    # Decode only because we're going to list methods, so we just need it to parse the arguments
-    namespace, name, version = fetch_method(namespace, name, decode_only=True)
-    return _get_method_version_internal(namespace, name)
-
-
-def fetch_config(reference, name=None, version=None, *args, decode_only=False):
-    """
-    fetches a config json given a variety of reference formats
-    Note: This method only fetches public configurations. You must use a workspacemanager
-    to fetch configurations from a workspace
-    1) reference = {method configuration JSON}
-    2) reference = "config namespace", name = "config name", (optional) verison = "config version"
-    3) reference = "config name"
-    4) reference = "config namespace/config name"
-    5) reference = "config namespace/config name/config version"
-    """
-    if len(args):
-        raise TypeError("decode_only is a keyword-only argument")
-    if isinstance(reference, dict):
-        namespace = reference['namespace']
-        name = reference['name']
-        if 'methodConfigVersion' in reference:
-            version = reference['methodConfigVersion']
-    elif name is None:
-        # Just one argument
-        data = reference.split('/')
-        if len(data) == 1:
-            # Just a name
-            configs = list_configs().query('name == "{}"'.format(data[0]))
-            try:
-                configs = configs.loc[configs.groupby('namespace').idxmax('snapshotId').snapshotId]
-            except AttributeError as e:
-                raise ConfigNotFound("No config by name '{}'".format(data[0])) from e
-            if len(configs) > 1:
-                raise ConfigNotUnique("Found more than one config with name '{}'. Must provide a namespace".format(data[0]))
-            if len(configs) == 0:
-                raise ConfigNotFound("No config by name '{}'".format(data[0]))
-            configs = configs.iloc[0]
-            namespace = configs['namespace']
-            name = configs['name']
-            # Even though a version was not provided by the user
-            # we found the latest snapshot as a byproduct of the search
-            version = configs['snapshotId']
-        elif len(data) >= 2:
-            # namespace / name
-            namespace = data[0]
-            name = data[1]
-            if len(data) == 3:
-                version = data[2]
-            elif len(data) > 3:
-                raise TypeError("Unable to determine argument configuration from {}".format(reference))
-    else:
-        namespace = reference
-    if decode_only:
-        return (namespace, name, version)
-    if version is None:
-        version = _get_config_version_internal(namespace, name)
-    response = firecloud.api.get_repository_config(namespace, name, version)
-    if response.status_code == 404:
-        raise ConfigNotFound("No such method {}/{}/{}".format(namespace, name, version))
-    elif response.status_code >= 400:
-        raise APIException("Failed to get method", response)
-    return response.json()
-
-
-def list_configs(namespace=None):
-    """List all configurations in the repository"""
-    r = firecloud.api.list_repository_configs()
-    if r.status_code != 200:
-        raise APIException(r)
-    r = r.json()
-
-    if namespace is not None:
-        r = [m for m in r if m['namespace']==namespace]
-
-    return pd.DataFrame(r).sort_values(['name', 'snapshotId'])
+    df = pd.DataFrame(r)
+    if len(df):
+        return df.sort_values(['name', 'snapshotId'])
+    return df
 
 
 def _get_config_internal(namespace, name):
-    """Get all versions of a configuration from the repository"""
+    """
+    Internal Use.
+    Get all versions of a configuration from the repository
+    """
     r = firecloud.api.list_repository_configs()
     if r.status_code != 200:
         raise APIException("Failed to list repository configurations", r)
@@ -505,89 +468,85 @@ def _get_config_internal(namespace, name):
     r = [m for m in r if m['name']==name and m['namespace']==namespace]
     return r
 
-def get_config(namespace, name=None):
+def get_config(reference):
     """
     Get all versions of a configuration from the repository
     Takes arguments in any of the following formats:
-    1) namespace = {method configuration JSON}
-    2) namespace = "config namespace", name = "config name"
-    3) namespace = "config name"
-    4) namespace = "config namespace/config name"
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    3) reference = "name"
     """
-    namespace, name, version = fetch_config(namespace, name, decode_only=True)
+    namespace, name, version = decode_config(namespace, name, decode_only=True)
     return _get_config_internal(namespace, name)
 
 def _get_config_version_internal(namespace, name):
-    """Get latest configuration version"""
+    """
+    Internal Use.
+    Get latest configuration version
+    """
     r = _get_config_internal(namespace, name)
     if len(r) == 0:
         raise ConfigNotFound("No such config {}/{}".format(namespace, name))
     return int(np.max([m['snapshotId'] for m in r]))
 
-def get_config_version(namespace, name=None):
+def get_config_version(reference):
     """
     Get latest configuration version
     Takes arguments in any of the following formats:
-    1) namespace = {method configuration JSON}
-    2) namespace = "config namespace", name = "config name"
-    3) namespace = "config name"
-    4) namespace = "config namespace/config name"
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    3) reference = "name"
     """
-    namespace, name, version = fetch_config(namespace, name, decode_only=True)
+    namespace, name, version = decode_config(namespace, name, decode_only=True)
     return _get_config_version_internal(namespace, name)
 
-def get_config_json(namespace, name=None, snapshot_id=None):
+def get_config_json(reference):
     """
     Get configuration JSON from repository
-    1) namespace = "config namespace", name = "config name", (optional) verison = "config version"
-    2) namespace = "config name"
-    3) namespace = "config namespace/config name"
-    4) namespace = "config namespace/config name/config version"
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    3) reference = "name"
     """
-    return fetch_config(namespace, name, snapshot_id)
+    namespace, name, version = decode_config(reference)
+    r = firecloud.api.get_repository_config(namespace, name, version)
+    if r.status_code == 404:
+        raise ConfigNotFound("No such config {}/{}/{}".format(namespace, name, version))
+    elif r.status_code != 200:
+        raise APIException("Unable to fetch config", r)
+    return json.loads(r.json()['payload'])
 
 
-def get_config_template(namespace, method=None, version=None):
+def get_config_template(reference):
     """
     Get configuration template for method
     Takes arguments in any of the following formats:
-    1) namespace = {method configuration JSON}
-    2) namespace = {method JSON}
-    3) namespace = "method namespace", method = "method name", (optional) verison = "method version"
-    4) namespace = "method namespace/method name"
-    5) namespace = "method namespace/method name/method version"
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
     """
-    method = fetch_method(namespace, method, version) # decode user inputs into a method object
+    namespace, name, version = decode_method(reference)
     r = firecloud.api.get_config_template(
-        method['namespace'],
-        method['name'],
-        method['snapshotId']
+        namespace,
+        name,
+        version
     )
-    if r.status_code != 200:
-        raise APIException("Failed to get method template", r)
+    if r.status_code == 404:
+        raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
+    elif r.status_code != 200:
+        raise APIException("Unable to fetch config template", r)
     return r.json()
 
 
-def autofill_config_template(namespace, method=None, *args, version=None, workflow_inputs=None):
+def autofill_config_template(reference, workflow_inputs):
     """
     Fill configuration template for workflow based on dependent tasks
     Namespace and method arguments can be in any of the following formats
-    1) namespace = {method configuration JSON}
-    2) namespace = {method JSON}
-    3) namespace = "method namespace", method = "method name", (optional) verison = "method version"
-    4) namespace = "method namespace/method name"
-    5) namespace = "method namespace/method name/method version"
-    workflow_inputs must always be a keyword argument
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
     """
-    if len(args):
-        raise TypeError("version and workflow_inputs are keyword-only arguments")
-    if workflow_inputs is None:
-        raise TypeError("workflow_inputs is required but must be passed as a keyword argument")
-    method = fetch_method(namespace, method, version)
-    attr = get_config_template(method) # Now we're passing the full method object
+    attr = get_config_template(reference) # Now we're passing the full method object
 
     # get dependent configurations
-    wdl = method['payload']
+    wdl = get_wdl(reference)
     wdls = [i.split()[1].replace('"','') for i in wdl.split('\n') if i.startswith('import')]
     assert [i.startswith('https://api.firecloud.org/ga4gh/v1/tools/') for i in wdls]
     methods = [i.split(':')[-1].split('/')[0] for i in wdls]
@@ -596,7 +555,7 @@ def autofill_config_template(namespace, method=None, *args, version=None, workfl
     for k,m in enumerate(methods, 1):
         print('\r  * importing configuration {}/{}'.format(k, len(methods)), end='')
         try:
-            configs[m] = get_config_json(method['namespace'], m+'_cfg')
+            configs[m] = get_config_json("{}/{}_cfg".format(method['namespace'], m))
         except:
             raise ValueError('No configuration found for {} ({} not found)'.format(m, m+'_cfg'))
     print()
@@ -604,15 +563,13 @@ def autofill_config_template(namespace, method=None, *args, version=None, workfl
     # parse out inputs/outputs
     inputs = {}
     for c in configs:
-        config_inputs = json.loads(configs[c]['payload'])['inputs']
-        for i in config_inputs:
-            inputs['.'.join(i.split('.')[1:])] = config_inputs[i]
+        for i in configs[c]['inputs']:
+            inputs['.'.join(i.split('.')[1:])] = configs[c]['inputs'][i]
 
     outputs = {}
     for c in configs:
-        config_outputs = json.loads(configs[c]['payload'])['outputs']
-        for i in config_outputs:
-            outputs['.'.join(i.split('.')[1:])] = config_outputs[i]
+        for i in configs[c]['outputs']:
+            outputs['.'.join(i.split('.')[1:])] = configs[c]['outputs'][i]
 
     # populate template
     for i in attr['inputs']:
@@ -651,75 +608,78 @@ def print_methods(namespace):
 
 def print_configs(namespace):
     """Print all configurations in a namespace"""
-    r = firecloud.api.list_repository_configs()
-    if r.status_code != 200:
-        raise APIException(r)
-    r = r.json()
-    r = [m for m in r if m['namespace']==namespace]
+    configs = list_configs(namespace=namespace)
+    if len(configs) == 0:
+        raise ConfigNotFound("No visible configurations in namespace {}".format(namespace))
     configs = np.unique([m['name'] for m in r])
     for k in configs:
         print('{}: {}'.format(k, np.max([m['snapshotId'] for m in r if m['name']==k])))
 
 
-def get_wdl(method_namespace, method_name=None, snapshot_id=None):
+def get_wdl(reference):
     """
     Get WDL from repository
     Takes arguments in any of the following formats:
-    1) method_namespace = {method configuration JSON}
-    2) method_namespace = {method JSON}
-    3) method_namespace = "method namespace", method_name = "method name", (optional) snapshot_id = "method version"
-    4) method_namespace = "method namespace/method name"
-    5) method_namespace = "method namespace/method name/method version"
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
     """
-    return fetch_method(method_namespace, method_name, snapshot_id)['payload']
+    return get_method_metadata(reference)['payload']
 
 
-def compare_wdls(mnamespace1, mname1, mnamespace2, mname2):
-    """Compare WDLs from two methods"""
+def compare_wdls(reference1, reference2):
+    """
+    Compare WDLs from two methods
+    References may be in any of the following formats:
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    """
     # (internal method is faster)
-    v1 = _get_method_version_internal(mnamespace1, mname1)
-    v2 = _get_method_version_internal(mnamespace2, mname2)
-    wdl1 = get_wdl(mnamespace1, mname1, v1)
-    wdl2 = get_wdl(mnamespace2, mname2, v2)
+    namespace1, name1, version1 = decode_method(reference1)
+    namespace2, name2, version2 = decode_method(reference2)
+    wdl1 = get_wdl(reference1)
+    wdl2 = get_wdl(reference2)
     print('Comparing:')
-    print('< {}:{}.v{}'.format(mnamespace1, mname1, v1))
-    print('> {}:{}.v{}'.format(mnamespace2, mname2, v2))
+    print('< {}/{}/{}'.format(namespace1, name1, version1))
+    print('> {}/{}/{}'.format(namespace2, name2, version2))
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
     d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, executable='/bin/bash')
     print(d.stdout.decode())
 
 
-def compare_wdl(mnamespace, mname, wdl_path):
-    """Compare method WDL to file"""
+def compare_wdl(reference, wdl_path):
+    """
+    Compare method WDL to file
+    Reference may be in any of the following formats:
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
+    """
     # (internal method is faster)
-    v = _get_method_version_internal(mnamespace, mname)
-    wdl1 = get_wdl(mnamespace, mname, v)
+    namespace, name, version = decode_method(reference)
+    wdl1 = get_wdl(reference)
     with open(wdl_path) as f:
         wdl2 = f.read()
     print('Comparing:')
     print('< {}'.format(wdl_path))
-    print('> {}:{}.v{}'.format(mnamespace, mname, v))
+    print('> {}/{}/{}'.format(namespace, name, version))
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
     d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, executable='/bin/bash')
     print(d.stdout.decode())
 
 
-def redact_method(method_namespace, method_name=None, *args, mode='outdated'):
+def redact_method(reference, mode='outdated'):
     """
     Redact method in repository
 
     mode: 'outdated', 'latest', 'all'
+
+    Reference may be in any of the following formats:
+    1) reference = "namespace/name/version"
+    2) reference = "namespace/name"
     """
-    if len(args):
-        raise TypeError("mode is a keyword-only argument")
-    assert mode in ['outdated', 'latest', 'all']
-    # just decode user inputs
-    method_namespace, method_name, version = fetch_method(method_namespace, method_name, decode_only=True)
-    r = firecloud.api.list_repository_methods()
-    if r.status_code != 200:
-        raise APIException(r)
-    r = r.json()
-    r = [m for m in r if m['name']==method_name and m['namespace']==method_namespace]
+    if mode not in {'outdated', 'latest', 'all'}:
+        raise ValueError("Mode must be in {'outdated', 'latest', 'all'}")
+    namespace, name, version =decode_method(reference=, decode_only=True)
+    methods = [m for m in list_methods() if m['name']==name and m['namespace']==namespace]
     versions = np.sort([m['snapshotId'] for m in r])
     print('Versions: {}'.format(', '.join(map(str, versions))))
     if mode == 'outdated':
@@ -733,12 +693,14 @@ def redact_method(method_namespace, method_name=None, *args, mode='outdated'):
             raise APIException(r)
 
 
-def update_method(namespace, method, synopsis, wdl_file, public=False, delete_old=True):
+def update_method(reference, synopsis, wdl_file, public=False, delete_old=True):
     """
     push new version, then redact previous version(s)
+    reference must be in format "namespace/name"
     """
+    namespace, method, _ = decode_method(reference, decode_only=True)
     # check whether prior version exists
-    r = get_method(namespace, method)
+    r = get_method(reference)
     old_version = None
     if r:
         old_version = np.max([m['snapshotId'] for m in r])

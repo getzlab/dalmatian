@@ -5,18 +5,22 @@ import numpy as np
 import subprocess
 import os
 import io
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 import firecloud.api
 from firecloud import fiss
+import functools
 import iso8601
 import pytz
 from datetime import datetime
+from threading import local
 from .core import *
 from hound import HoundClient
 import warnings
-from contextlib import ExitStack
+from contextlib import contextmanager, ExitStack
 import traceback
 import sys
+from agutil import status_bar, splice, byteSize
+from agutil.parallel import parallelize
 
 #------------------------------------------------------------------------------
 #  Extension of firecloud.api functionality using the rawls (internal) API
@@ -72,7 +76,114 @@ def _batch_update_entities(namespace, workspace, json_body):
 
     return firecloud.api.__post(uri, headers=headers, json=json_body)
 
-class LegacyWorkspaceManager(object):
+
+#------------------------------------------------------------------------------
+# Wrapper to allow control of FISS timeouts
+#------------------------------------------------------------------------------
+
+timeout_state = local()
+
+# For legacy methods or non-cached operations, the timeout will be None (infinite)
+DEFAULT_LONG_TIMEOUT = 30 # Seconds to wait if a value is not cached
+DEFAULT_SHORT_TIMEOUT = 5 # Seconds to wait if a value is already cached
+
+@contextmanager
+def set_timeout(n):
+    """
+    Context Manager:
+    Temporarily sets a timeout on all firecloud requests within context
+    Resets timeout on context exit
+    Thread safe! (Each thread has an independent timeout)
+    """
+    try:
+        if not hasattr(timeout_state, 'timeout'):
+            timeout_state.timeout = None
+        old_timeout = timeout_state.timeout
+        timeout_state.timeout = n
+        yield
+    finally:
+        timeout_state.timeout = old_timeout
+
+# Generate the fiss agent header
+
+@functools.wraps(firecloud.api._fiss_agent_header)
+def _firecloud_api_timeout_monkey_patcher(headers=None):
+    """
+    Monkey Patcher to apply allow external timeout control of Firecloud API
+    """
+    # 1) call the actual _fiss_agent_header to initialize the session
+    headers = _firecloud_api_timeout_monkey_patcher.__wrapped__(headers)
+    # 2) Get a reference to the underlying request method
+    __CORE_SESSION_REQUEST__ = firecloud.api.__SESSION.request
+    if hasattr(__CORE_SESSION_REQUEST__, '__wrapped__'):
+        __CORE_SESSION_REQUEST__ = __CORE_SESSION_REQUEST__.__wrapped__
+    # 3) Wrap the request method with our timeout wrapper
+    @functools.wraps(__CORE_SESSION_REQUEST__)
+    def _firecloud_api_timeout_wrapper(*args, **kwargs):
+        """
+        Wrapped version of the fiss reusable session request method
+        Applies a default timeout based on the current thread's timeout value
+        Default timeout can be overridden by kwargs
+        """
+        if not hasattr(timeout_state, 'timeout'):
+            timeout_state.timeout = None
+        return __CORE_SESSION_REQUEST__(
+            *args,
+            **{
+                **{'timeout': timeout_state.timeout},
+                **kwargs
+            }
+        )
+
+    firecloud.api.__SESSION.request = _firecloud_api_timeout_wrapper
+    # 4) Unwrap _fiss_agent_header. We don't need to monkey patch anymore
+    if hasattr(firecloud.api._fiss_agent_header, '__wrapped__'):
+        firecloud.api._fiss_agent_header = firecloud.api._fiss_agent_header.__wrapped__
+    return headers
+
+firecloud.api._fiss_agent_header = _firecloud_api_timeout_monkey_patcher
+
+#------------------------------------------------------------------------------
+# Hound Conflict Helper
+#------------------------------------------------------------------------------
+
+ProvenanceConflict = namedtuple(
+    "ProvenanceConflict",
+    ['liveValue', 'latestRecord']
+)
+
+#------------------------------------------------------------------------------
+#  Top-level classes representing workspace(s)
+#------------------------------------------------------------------------------
+class WorkspaceCollection(object):
+    def __init__(self):
+        self.workspace_list = []
+
+    def add(self, workspace_manager):
+        assert isinstance(workspace_manager, WorkspaceManager)
+        self.workspace_list.append(workspace_manager)
+
+    def remove(self, workspace_manager):
+        self.workspace_list.remove(workspace_manager)
+
+    def print_workspaces(self):
+        print('Workspaces in collection:')
+        for i in self.workspace_list:
+            print('  {}/{}'.format(i.namespace, i.workspace))
+
+    def get_submission_status(self, show_namespaces=False):
+        """Get status of all submissions across workspaces"""
+        dfs = []
+        for i in self.workspace_list:
+            df = i.get_submission_status(show_namespaces=show_namespaces)
+            if show_namespaces:
+                df['workspace'] = '{}/{}'.format(i.namespace, i.workspace)
+            else:
+                df['workspace'] = i.workspace
+            dfs.append(df)
+        return pd.concat(dfs, axis=0)
+
+class WorkspaceManager(object):
     def __init__(self, namespace, workspace=None, timezone='America/New_York', credentials=None, user_project=None):
         if workspace is None:
             self.namespace, self.workspace = namespace.split('/')
@@ -145,25 +256,102 @@ class LegacyWorkspaceManager(object):
             raise APIException("Failed to delete workspace", r)
 
 
-    def get_bucket_id(self):
-        """Get the GCS bucket ID associated with the workspace"""
-        r = firecloud.api.get_workspace(self.namespace, self.workspace)
+    def get_workspace_metadata(self):
+        """
+        Get the full workspace entry from firecloud
+        """
+        r = firecloud.api.get_workspace(
+            self.namespace,
+            self.workspace
+        )
         if r.status_code != 200:
             raise APIException("Unable to get workspace metadata", r)
-        r = r.json()
-        bucket_id = r['workspace']['bucketName']
-        return bucket_id
+        return r.json()
+
+
+    def get_bucket_id(self):
+        """Get the GCS bucket ID associated with the workspace"""
+        return self.get_workflow_metadata()['workspace']['bucketName']
+
+
+    def get_entity_types(self):
+        """
+        Returns the list of entitiy types present in the workspace
+        """
+        r = getattr(firecloud.api, '__get')('/api/workspaces/{}/{}/entities'.format(
+            self.namespace,
+            self.workspace
+        ))
+        if r.status_code != 200:
+            raise APIException("Failed to get list of entity types", r)
+
+
+    def upload_entity_data(self, etype, df):
+        """
+        Checks a given entity dataframe for local files which need to be uploaded
+        Returns a new df with new gs:// paths for the uploaded files
+        """
+        base_path = "gs://{}/{}s".format(self.get_bucket_id(), etype)
+        uploads = []
+
+        def scan_row(row):
+            # Note: due to something stupid in pandas apply, this gets called
+            # twice on the first row
+            # Not a huge deal though, because the paths will already be uploading
+            # and will not represent valid filepaths anymore
+            for i, value in enumerate(row):
+                if isinstance(value, str) and os.path.isfile(value):
+                    path = "{}/{}/{}".format(
+                        base_path,
+                        row.name,
+                        os.path.basename(value)
+                    )
+                    uploads.append(upload_to_blob(value, path))
+                    self.hound.write_log_entry(
+                        'upload',
+                        "Uploading new file to workspace: {} ({})".format(
+                            os.path.basename(value),
+                            byteSize(os.path.getsize(value))
+                        ),
+                        entities=['{}/{}'.format(
+                            etype,
+                            row.name
+                        )]
+                    )
+                    row.iloc[i] = path
+            return row
+
+        # Scan the df for uploadable filepaths
+        staged_df = df.copy().apply(scan_row, axis='columns')
+
+        if len(uploads):
+            # Wait for callbacks
+            [callback() for callback in status_bar.iter(uploads, prepend="Uploading {}s ".format(etype))]
+
+        # Now upload as normal
+        return staged_df
 
 
     def upload_entities(self, etype, df, index=True):
         """
         index: True if DataFrame index corresponds to ID
+        Uploads local files present in the DF
         """
         buf = io.StringIO()
-        df.to_csv(buf, sep='\t', index=index)
+        self.upload_entity_data(etype, df).to_csv(buf, sep='\t', index=index)
         s = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
         buf.close()
         et = etype.replace('_set', ' set')
+        idx = None
+        index_column = None
+        if index:
+            idx = df.index
+        elif 'entity:{}_id'.format(etype) in df.columns:
+            idx = df['entity:{}_id'.format(etype)]
+            index_column = 'entity:{}_id'.format(etype)
+        elif etype+'_id' in df.columns:
+            idx = df[etype+'_id']
+            index_column = etype+'_id'
         if s.status_code == 200:
             if 'set' in etype:
                 if index:
@@ -178,7 +366,6 @@ class LegacyWorkspaceManager(object):
             with ExitStack() as stack:
                 idx = df.index if index else (df[etype+'_id'] if etype+'_id' in df.columns else None)
                 if len(df) > 100:
-                    print("Updating many hound records. Switching to batch updates")
                     stack.enter_context(self.hound.batch())
                 self.hound.write_log_entry(
                     "upload",
@@ -193,20 +380,21 @@ class LegacyWorkspaceManager(object):
                     )
                 )
 
-                if idx is not None:
-                    for eid, data in df.iterrows():
+                if self.hound._enabled:
+                    for eid, (name, data) in zip(idx, df.iterrows()):
                         self.hound.update_entity_meta(
                             etype,
                             eid,
                             "User uploaded new entity"
                         )
                         for attr, val in data.items():
-                            self.hound.update_entity_attribute(
-                                etype,
-                                eid,
-                                attr,
-                                val
-                            )
+                            if attr != index_column:
+                                self.hound.update_entity_attribute(
+                                    etype,
+                                    eid,
+                                    attr,
+                                    val
+                                )
         else:
             raise APIException('{} import failed.'.format(et.capitalize()), s)
 
@@ -218,15 +406,6 @@ class LegacyWorkspaceManager(object):
             columns=['entity:participant_id']
         )
         self.upload_entities('participant', participant_df, index=False)
-        self.hound.write_log_entry(
-            "upload",
-            "Uploaded {} participants".format(
-                len(participant_df),
-            ),
-            entities=[
-                os.path.join('participant', eid) for eid in participant_ids
-            ]
-        )
 
 
     def upload_samples(self, df, participant_df=None, add_participant_samples=False):
@@ -236,18 +415,25 @@ class LegacyWorkspaceManager(object):
 
         df columns: sample_id (index), participant[_id], {sample_set_id,}, additional attributes
         """
-        assert df.index.name=='sample_id' and ('participant' in df.columns or 'participant_id' in df.columns)
+        if df.index.name != 'sample_id':
+            raise ValueError("Index name must be 'sample_id'")
         if 'participant' in df.columns:
             participant_col = 'participant'
-        else:
+        elif 'participant_id' in df.columns:
             participant_col = 'participant_id'
+        else:
+            raise ValueError("DataFrame must include either 'participant' or 'participant_id' column")
+
 
         # 1) upload participant IDs (without additional attributes)
         if participant_df is None:
             self.upload_participants(np.unique(df[participant_col]))
         else:
-            assert (participant_df.index.name=='entity:participant_id'
-                or participant_df.columns[0]=='entity:participant_id')
+            if not (
+                participant_df.index.name == 'entity:participant_id'
+                or participant_df.columns[0] == 'entity:participant_id'
+            ):
+                raise ValueError("participant_df index name or first column must be 'entity:participant_id'")
             self.upload_entities('participant', participant_df,
                 index=participant_df.index.name=='entity:participant_id')
 
@@ -260,7 +446,13 @@ class LegacyWorkspaceManager(object):
         if 'sample_set_id' in df.columns:
             set_df = pd.DataFrame(data=sample_df.index.values, index=df['sample_set_id'], columns=['sample_id'])
             set_df.index.name = 'membership:sample_set_id'
-            self.upload_entities('sample_set', set_df)
+            try:
+                hound_state = self.hound._enabled
+                self.hound.disable()
+                # uploading entities like this results in weird records
+                self.upload_entities('sample_set', set_df)
+            finally:
+                self.hound._enabled = hound_state
 
         if add_participant_samples:
             # 4) add participant.samples_
@@ -269,7 +461,7 @@ class LegacyWorkspaceManager(object):
             self.update_participant_entities('sample')
 
 
-    def update_participant_entities(self, etype):
+    def update_participant_entities(self, etype, target_set=None):
         """Attach entities (samples or pairs) to participants"""
 
         # get etype -> participant mapping
@@ -280,35 +472,80 @@ class LegacyWorkspaceManager(object):
         else:
             raise ValueError('Entity type {} not supported'.format(etype))
 
-        entitites_dict = {k:g.index.values for k,g in df.groupby('participant')}
+        if target_set is not None:
+            df = df.loc[
+                df.index.intersection(
+                    self._get_entities_internal(etype+'_set')[etype+'s'][target_set]
+                )
+            ]
+
+        entities_dict = {k:g.index.values for k,g in df.groupby('participant')}
         participant_ids = np.unique(df['participant'])
 
-        for n,k in enumerate(participant_ids, 1):
-            print('\r    Updating {}s for participant {}/{}'.format(etype, n, len(participant_ids)), end='')
+        column = "{}s_{}".format(
+            etype,
+            (target_set if target_set is not None else '')
+        )
+        last_result = 0
+
+        @parallelize(3)
+        def update_participant(participant_id):
             attr_dict = {
-                "{}s_".format(etype): {
+                column: {
                     "itemsType": "EntityReference",
-                    "items": [{"entityType": etype, "entityName": i} for i in entitites_dict[k]]
+                    "items": [{"entityType": etype, "entityName": i} for i in entities_dict[participant_id]]
                 }
             }
             attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-            r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
-            self.hound.update_entity_attribute(
-                'participant',
-                k,
-                '{}s_'.format(etype),
-                list(entitites_dict[k]),
-                "<Automated> Populating attribute from entity references"
-            )
-            if r.status_code != 200:
-                raise APIException(r)
-        print('\n    Finished attaching {}s to {} participants'.format(etype, len(participant_ids)))
-        for pid in participant_ids:
-            self.hound.update_entity_meta(
-                'participant',
-                pid,
-                "Updated {}s_ membership".format(etype)
-            )
+            # It adds complexity to put the context manager here, but
+            # since the timeout is thread-specific it needs to be set within
+            # the thread workers
+            with set_timeout(DEFAULT_SHORT_TIMEOUT):
+                try:
+                    r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', participant_id, attrs)
+                    if r.status_code != 200:
+                        last_result = r.status_code
+                except requests.ReadTimeout:
+                    return participant_id, 503 # fake a bad status code to requeue
+            return participant_id, r.status_code
+
+        n_participants = len(participant_ids)
+
+        with self.hound.batch():
+            with self.hound.with_reason("<Automated> Populating attribute from entity references"):
+                for attempt in range(5):
+                    retries = []
+
+                    for k, status in status_bar.iter(update_participant(participant_ids), len(participant_ids), prepend="Updating {}s for participants ".format(etype)):
+                        if status >= 400:
+                            retries.append(k)
+                        else:
+                            self.hound.update_entity_meta(
+                                'participant',
+                                k,
+                                "Updated {} membership".format(column)
+                            )
+                            self.hound.update_entity_attribute(
+                                'participant',
+                                k,
+                                column,
+                                list(entities_dict[k])
+                            )
+
+                    if len(retries):
+                        if attempt >= 4:
+                            print("\nThe following", len(retries), "participants could not be updated:", ', '.join(retries), file=sys.stderr)
+                            raise APIException(
+                                "{} participants could not be updated after 5 attempts".format(len(retries)),
+                                last_result
+                            )
+                        else:
+                            print("\nRetrying remaining", len(retries), "participants")
+                            participants = [item for item in retries]
+                    else:
+                        break
+
+            print('\n    Finished attaching {}s to {} participants'.format(etype, n_participants))
 
 
     def update_participant_samples(self):
@@ -378,18 +615,46 @@ class LegacyWorkspaceManager(object):
         self.delete_entity_attributes(self, 'sample_set', sample_set_id, attrs)
 
 
-    def update_attributes(self, attr_dict):
+    def update_attributes(self, attr_dict=None, **kwargs):
         """
         Set or update workspace attributes. Wrapper for API 'set' call
+        Accepts a dictionary of attribute:value pairs and/or keyword arguments.
+        Updates workspace attributes using the combination of the attr_dict and any keyword arguments
+        Any values which reference valid filepaths will be uploaded to the workspace
         """
-        attr_dict = {**attr_dict} # dicts are mutable. make a copy
+        if attr_dict is None:
+            attr_dict = {}
+        attr_dict = {**attr_dict, **kwargs}
         for k in [*attr_dict]:
             if 'library:' in k:
-                print("Refusing to update protected attribute '{}'; Set it manually in FireCloud".format(k))
+                print("Refusing to update protected attribute '{}'; Set it manually in FireCloud".format(k), file=sys.stderr)
                 del attr_dict[k]
+        if not len(attr_dict):
+            print("No attributes to update", file=sys.stderr)
+            return {}
+        base_path = 'gs://{}/workspace'.format(self.get_bucket_id())
+        uploads = []
+        for key, value in attr_dict.items():
+            if isinstance(value, str) and os.path.isfile(value):
+                path = '{}/{}'.format(base_path, os.path.basename(value))
+                uploads.append(upload_to_blob(value, path))
+                self.hound.write_log_entry(
+                    'upload',
+                    "Uploading new file to workspace: {} ({})".format(
+                        os.path.basename(value),
+                        byteSize(os.path.getsize(value))
+                    ),
+                    entities=['workspace.{}'.format(key)]
+                )
+                attr_dict[key] = path
+        if len(uploads):
+            [callback() for callback in status_bar.iter(uploads, prepend="Uploading attributes ")]
+
         # attrs must be list:
         attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
         r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)
+        if r.status_code != 200:
+            raise APIException("Unable to update workspace attributes", r)
         with ExitStack() as stack:
             if len(attr_dict) > 100:
                 stack.enter_context(self.hound.batch())
@@ -401,30 +666,31 @@ class LegacyWorkspaceManager(object):
             )
             for k,v in attr_dict.items():
                 self.hound.update_workspace_attribute(k, v)
-        if r.status_code != 200:
-            raise APIException(r)
+
         print('Successfully updated workspace attributes in {}/{}'.format(self.namespace, self.workspace))
+        return attr_dict
 
 
-    def get_attributes(self):
+    def get_attributes(self, show_hidden=False):
         """Get workspace attributes"""
-        r = firecloud.api.get_workspace(self.namespace, self.workspace)
-        if r.status_code != 200:
-            raise APIException(r)
-        attr = r.json()['workspace']['attributes']
-        for k in [k for k in attr if 'library:' in k]:
-            attr.pop(k)
-        return attr
+        attr = self.get_workspace_metadata()['workspace']['attributes']
+        if show_hidden:
+            return attr
+        return {
+            key:val for key,val in attr.items()
+            if not key.startswith('library:')
+        }
 
 
     def get_sample_attributes_in_set(self, set):
         """Get sample attributes of samples in a set"""
-        samples = self.get_sample_sets().loc[set]['samples']
-        all_samples = self.get_samples().index
+        samples = self.get_samples()
+        samples_in_set = self.get_sample_sets().loc[set]['samples']
+        all_samples = samples.index
         idx = np.zeros(len(all_samples), dtype=bool)
         for s in samples:
             idx[all_samples == s] = True
-        return self.get_samples()[idx]
+        return samples[idx]
 
 
     def get_submission_status(self, config=None, filter_active=True, show_namespaces=False):
@@ -514,28 +780,39 @@ class LegacyWorkspaceManager(object):
 
         # get status of last run submission
         entity_dict = {}
-        for k,s in enumerate(submissions, 1):
+
+        @parallelize(3)
+        def get_status(s):
+            for attempt in range(3):
+                with set_timeout(DEFAULT_SHORT_TIMEOUT):
+                    if s['submissionEntity']['entityType']!=etype:
+                        print('\rIncompatible submission entity type: {}'.format(
+                            s['submissionEntity']['entityType']))
+                        print('\rSkipping : '+ s['submissionId'])
+                        return
+                    try:
+                        r = self.get_submission(s['submissionId'])
+                        ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
+                        for w in r['workflows']:
+                            entity_id = w['workflowEntity']['entityName']
+                            if entity_id not in entity_dict or entity_dict[entity_id]['timestamp']<ts:
+                                entity_dict[entity_id] = {
+                                    'status':w['status'],
+                                    'timestamp':ts,
+                                    'submission_id':s['submissionId'],
+                                    'configuration':s['methodConfigurationName']
+                                }
+                                if 'workflowId' in w:
+                                    entity_dict[entity_id]['workflow_id'] = w['workflowId']
+                                else:
+                                    entity_dict[entity_id]['workflow_id'] = 'NA'
+                    except (APIException, requests.ReadTimeout):
+                        if attempt >= 2:
+                            raise
+
+        for k,s in enumerate(get_status(submissions), 1):
             print('\rFetching submission {}/{}'.format(k, len(submissions)), end='')
-            if s['submissionEntity']['entityType']!=etype:
-                print('\rIncompatible submission entity type: {}'.format(
-                    s['submissionEntity']['entityType']))
-                print('\rSkipping : '+ s['submissionId'])
-                continue
-            r = self.get_submission(s['submissionId'])
-            ts = datetime.timestamp(iso8601.parse_date(s['submissionDate']))
-            for w in r['workflows']:
-                entity_id = w['workflowEntity']['entityName']
-                if entity_id not in entity_dict or entity_dict[entity_id]['timestamp']<ts:
-                    entity_dict[entity_id] = {
-                        'status':w['status'],
-                        'timestamp':ts,
-                        'submission_id':s['submissionId'],
-                        'configuration':s['methodConfigurationName']
-                    }
-                    if 'workflowId' in w:
-                        entity_dict[entity_id]['workflow_id'] = w['workflowId']
-                    else:
-                        entity_dict[entity_id]['workflow_id'] = 'NA'
+
         print()
         status_df = pd.DataFrame(entity_dict).T
         status_df.index.name = etype+'_id'
@@ -749,16 +1026,21 @@ class LegacyWorkspaceManager(object):
         # for successful jobs, get metadata and count attempts
         status_df = status_df[status_df['status']=='Succeeded'].copy()
         metadata_dict = {}
-        for k,(i,row) in enumerate(status_df.iterrows(), 1):
+
+        @parallelize(3)
+        def get_metadata(i, row):
+            for attempt in range(3):
+                with set_timeout(DEFAULT_SHORT_TIMEOUT):
+                    try:
+                        return i, self.get_workflow_metadata(row['submission_id'], row['workflow_id'])
+                    except (APIException, requests.ReadTimeout):
+                        if attempt >= 2:
+                            raise
+
+        for k,(i,data) in enumerate(get_metadata(*splice(status_df.iterrows())), 1):
             print('\rFetching metadata {}/{}'.format(k,status_df.shape[0]), end='')
-            fetch = True
-            while fetch:  # improperly dealing with 500s here...
-                try:
-                    metadata = self.get_workflow_metadata(row['submission_id'], row['workflow_id'])
-                    metadata_dict[i] = metadata.json()
-                    fetch = False
-                except:
-                    pass
+            metadata_dict[i] = data
+        print()
 
         # if workflow_name is None:
             # split output by workflow
@@ -838,11 +1120,19 @@ class LegacyWorkspaceManager(object):
     #-------------------------------------------------------------------------
     #  Methods for manipulating configurations
     #-------------------------------------------------------------------------
-    def list_configs(self):
-        """List configurations in workspace"""
-        r = firecloud.api.list_workspace_configs(self.namespace, self.workspace)
+    def list_configs(self, include_docstore=False):
+        """
+        List configurations in workspace
+        """
+        r = getattr(firecloud.api, '__SESSION').get(
+            'https://api.firecloud.org/api/workspaces/{}/{}/methodconfigs{}'.format(
+                self.namespace,
+                self.workspace,
+                '?allRepos=true' if include_docstore else ''
+            )
+        )
         if r.status_code != 200:
-            raise APIException(r)
+            raise APIException('Failed to list workspace configurations', r)
         return r.json()
 
 
@@ -850,7 +1140,7 @@ class LegacyWorkspaceManager(object):
         """Get workspace configuration JSON"""
         r = firecloud.api.get_workspace_config(self.namespace, self.workspace, cnamespace, config)
         if r.status_code != 200:
-            raise APIException(r)
+            raise APIException('Failed to get configuration {}/{}'.format(cnamespace, config), r)
         return r.json()
 
 
