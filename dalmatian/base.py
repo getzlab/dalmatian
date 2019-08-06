@@ -1956,6 +1956,36 @@ class WorkspaceManager(object):
         #         gs_delete(purge_paths, chunk_size=500)
 
 
+    @staticmethod
+    def _process_attribute_value(key, value, reserved_attrs=None):
+        """
+        Processes a potential entity attribute update to handle special cases
+        Entity references and arrays are updated to proper firecloud formats
+        """
+        if reserved_attrs is not None and key in reserved_attrs:
+            if isinstance(value, list):
+                return {
+                    'itemsType': 'EntityReference',
+                    'items': [
+                        {
+                            'entityType': reserved_attrs[key],
+                            'entityName': entity
+                        }
+                        for entity in value
+                    ]
+                }
+            return {
+                'entityType': reserved_attrs[key],
+                'entityName': str(value)
+            }
+        elif isinstance(value, list):
+            return {
+                'itemsType': 'AttributeValue',
+                'items': value
+            }
+        return str(value)
+
+
     def update_entity_attributes(self, etype, attrs):
         """
         Create or update entity attributes
@@ -1977,6 +2007,7 @@ class WorkspaceManager(object):
             reserved_attrs = {'participant': 'participant','case_sample': 'sample','control_sample': 'sample'}
         else:
             reserved_attrs = {}
+
         if isinstance(attrs, pd.DataFrame):
             attr_list = []
             for i,row in attrs.iterrows():
@@ -1987,10 +2018,7 @@ class WorkspaceManager(object):
                         {
                             "op": "AddUpdateAttribute",
                             "attributeName": i,
-                            "addUpdateAttribute": ({
-                                'entityType': reserved_attrs[i],
-                                'entityName': str(j)
-                            } if i in reserved_attrs else str(j))
+                            "addUpdateAttribute": self._process_attribute_value(i, j, reserved_attrs)
                         } for i,j in row.iteritems() if not np.any(pd.isnull(j))
                     ]
                 }])
@@ -2002,10 +2030,7 @@ class WorkspaceManager(object):
                     {
                         "op": "AddUpdateAttribute",
                         "attributeName": attrs.name,
-                        "addUpdateAttribute": ({
-                            'entityType': reserved_attrs[attrs.name],
-                            'entityName': str(j)
-                        } if attrs.name in reserved_attrs else str(j))
+                        "addUpdateAttribute": self._process_attribute_value(i, j, reserved_attrs)
                     }
                 ]
             } for i,j in attrs.iteritems() if not np.any(pd.isnull(j))]
@@ -2038,7 +2063,11 @@ class WorkspaceManager(object):
                                 etype,
                                 obj['name'],
                                 attr['attributeName'],
-                                attr['addUpdateAttribute']
+                                attr['addUpdateAttribute'] if isinstance(attr['addUpdateAttribute'], str)
+                                else (
+                                    attr['addUpdateAttribute']['entityName'] if 'entityName' in attr['addUpdateAttribute']
+                                    else attr['addUpdateAttribute']['items']
+                                )
                             )
         elif r.status_code >= 400:
             raise APIException("Unable to update entity attributes", r)
