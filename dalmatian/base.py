@@ -2039,47 +2039,57 @@ class WorkspaceManager(object):
 
         # try rawls batch call if available
         r = _batch_update_entities(self.namespace, self.workspace, attr_list)
-        # try:  # TODO
-        if r.status_code == 204:
-            if isinstance(attrs, pd.DataFrame):
-                print("Successfully updated attributes '{}' for {} {}s.".format(attrs.columns.tolist(), attrs.shape[0], etype))
-            elif isinstance(attrs, pd.Series):
-                print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
+        try:
+            if r.status_code == 204:
+                if isinstance(attrs, pd.DataFrame):
+                    print("Successfully updated attributes '{}' for {} {}s.".format(attrs.columns.tolist(), attrs.shape[0], etype))
+                elif isinstance(attrs, pd.Series):
+                    print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
+                else:
+                    print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
+            elif r.status_code >= 400:
+                raise APIException("Unable to update entity attributes", r)
             else:
-                print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
-            if self.hound._enabled:
-                with self.hound.batch():
-                    for obj in attr_list:
-                        self.hound.update_entity_meta(
+                print(r.text)
+        except:  # revert to public API
+            traceback.print_exc()
+            print("Failed to use batch update endpoint; switching to slower fallback")
+            for update in attr_list:
+                r = firecloud.api.update_entity(
+                    self.namespace,
+                    self.workspace,
+                    update['entityType'],
+                    update['name'],
+                    update['operations']
+                )
+                if r.status_code==200:
+                    print('Successfully updated {}.'.format(update['name']))
+                elif r.status_code >= 400:
+                    raise APIException("Unable to update entity attributes", r)
+                else:
+                    print(r.text)
+        if self.hound._enabled:
+            with self.hound.batch():
+                for obj in attr_list:
+                    self.hound.update_entity_meta(
+                        etype,
+                        obj['name'],
+                        "Updating {} attributes: {}".format(
+                            len(obj['operations']),
+                            ', '.join(attr['attributeName'] for attr in obj['operations'])
+                        )
+                    )
+                    for attr in obj['operations']:
+                        self.hound.update_entity_attribute(
                             etype,
                             obj['name'],
-                            "Updating {} attributes: {}".format(
-                                len(obj['operations']),
-                                ', '.join(attr['attributeName'] for attr in obj['operations'])
+                            attr['attributeName'],
+                            attr['addUpdateAttribute'] if isinstance(attr['addUpdateAttribute'], str)
+                            else (
+                                attr['addUpdateAttribute']['entityName'] if 'entityName' in attr['addUpdateAttribute']
+                                else attr['addUpdateAttribute']['items']
                             )
                         )
-                        for attr in obj['operations']:
-                            self.hound.update_entity_attribute(
-                                etype,
-                                obj['name'],
-                                attr['attributeName'],
-                                attr['addUpdateAttribute'] if isinstance(attr['addUpdateAttribute'], str)
-                                else (
-                                    attr['addUpdateAttribute']['entityName'] if 'entityName' in attr['addUpdateAttribute']
-                                    else attr['addUpdateAttribute']['items']
-                                )
-                            )
-        elif r.status_code >= 400:
-            raise APIException("Unable to update entity attributes", r)
-        else:
-            print(r.text)
-        # except:  # revert to public API
-        #     attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
-        #     r = firecloud.api.update_entity(self.namespace, self.workspace, etype, ename, attrs)
-        #     if r.status_code==200:
-        #         print('Successfully updated {}.'.format(ename))
-        #     else:
-        #         print(r.text)
 
 
     def create_submission(self, reference, entity, etype=None, expression=None, use_callcache=True):
