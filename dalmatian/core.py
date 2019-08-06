@@ -15,6 +15,7 @@ from functools import lru_cache
 from agutil.parallel import parallelize2
 from google.cloud import storage
 import requests
+import urllib
 
 # Collection of high-level wrapper functions for FireCloud API
 
@@ -296,22 +297,21 @@ def decode_method(reference, decode_only=False):
     1) reference = "namespace/name/version"
     2) reference = "namespace/name"
     """
-    data = reference.split('/')
-    if len(data) == 2:
-        # Get the version
-        namespace, name = data
-        return namespace, name, None if decode_only else _get_method_version_internal(namespace, name)
-    elif len(data) == 3:
-        namespace, name, version = data
-        return namespace, name, int(version)
-    raise ValueError("Method reference must be in format 'namespace/name' or 'namespace/name/version'")
+    try:
+        data = reference.split('/')
+        if len(data) == 2:
+            # Get the version
+            namespace, name = data
+            return namespace, name, None if decode_only else _get_method_version_internal(namespace, name)
+        elif len(data) == 3:
+            namespace, name, version = data
+            return namespace, name, int(version)
+        raise ValueError("Method reference must be in format 'namespace/name' or 'namespace/name/version'")
+    except Exception as e:
+        if reference.startswith('dockstore.org'):
+            raise TypeError("Only accepts standard agora namespace/name references") from e
+        raise
 
-    # response = firecloud.api.get_repository_method(namespace, name, version)
-    # if response.status_code == 404:
-    #     raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
-    # elif response.status_code >= 400:
-    #     raise APIException("Failed to get method", response)
-    # return response.json()
 
 # NOTE: [ATTN] uses legacy call syntax
 def list_methods(namespace=None, name=None):
@@ -347,6 +347,7 @@ def _get_method_internal(namespace, name):
     if len(r) == 0:
         raise MethodNotFound("No such method {}/{}".format(namespace, name))
     return r
+
 
 def get_method(reference):
     """
@@ -386,6 +387,7 @@ def _get_method_version_internal(namespace, name):
         raise MethodNotFound("No such method {}/{}".format(namespace, name))
     return int(np.max([m['snapshotId'] for m in r]))
 
+
 def get_method_version(reference):
     """
     Gets the latest method version
@@ -394,8 +396,91 @@ def get_method_version(reference):
     2) reference = "namespace/name"
     """
     # Decode only because we're going to list methods, so we just need it to parse the arguments
-    namespace, name, version = fetch_method(reference, decode_only=True)
+    namespace, name, version = decode_method(reference, decode_only=True)
     return _get_method_version_internal(namespace, name)
+
+
+def get_dockstore_method(reference):
+    """
+    Get all available versions of a dockstore workflow
+    1) reference = "dockstore.org/namespace/name/version" (Note: version is ignored in this case)
+    2) reference = "dockstore.org/namespace/name"
+    """
+    if not reference.startswith('dockstore.org/'):
+        raise TypeError("Only accepts dockstore.org methodPaths")
+    repo, name = reference[14:].split('/')[:2]
+    path = os.path.join('dockstore.org', repo, name)
+    response = requests.get(
+        "https://dockstore.org/api/workflows/path/entry/{}/published".format(
+            urllib.parse.quote_plus(path)
+        )
+    )
+    if response.status_code == 400 and 'Entry not found' in response.text:
+        raise MethodNotFound("No such method on dockstore {}".format(path))
+    elif response.status_code != 200:
+        raise APIException("Dockstore API returned unexpected status", response)
+    dockstore_method = response.json()
+    if dockstore_method['descriptorType'] != 'wdl':
+        raise TypeError("dockstore method {} is not a WDL-based workflow".format(path))
+    return [
+        {
+            **version,
+            'repository': repo,
+            'workflow': name,
+            'methodPath': path,
+            'methodRepoMethod': {
+                'sourceRepo': 'dockstore',
+                'methodVersion': version['name'],
+                'methodPath': path,
+                'methodUri': 'dockstore://{}/{}'.format(
+                    urllib.parse.quote_plus(path),
+                    version['name']
+                )
+            }
+        }
+        for version in sorted(
+            dockstore_method['workflowVersions'],
+            key=lambda workflow:workflow['last_modified'],
+        )
+    ]
+
+
+def get_dockstore_method_version(reference):
+    """
+    Get a specific version of a dockstore workflow
+    1) reference = "dockstore.org/namespace/name/version"
+    2) reference = "dockstore.org/namespace/name" (uses latest version)
+    """
+    versions = get_dockstore_method(reference)
+    data = reference.split('/')
+    if len(data) == 3:
+        # use latest version
+        return versions[-1]
+    _, repo, workflow, version = data
+    for entry in versions:
+        if entry['name'] == version:
+            return entry
+    raise MethodNotFound("Version {} not available for method dockstore.org/{}/{}".format(
+        version,
+        repo,
+        workflow
+    ))
+
+
+def get_dockstore_config_template(reference):
+    """
+    Get a method config template from a dockstore method
+    1) reference = "dockstore.org/namespace/name/version"
+    2) reference = "dockstore.org/namespace/name" (uses latest version)
+    """
+    method = get_dockstore_method_version(reference)
+    r = firecloud.api.__post(
+        'template',
+        json=method['methodRepoMethod']
+    )
+    if r.status_code != 200:
+        raise APIException("Unable to build dockstore template", r)
+    return r.json()
 
 
 @lru_cache(16)
@@ -678,7 +763,7 @@ def redact_method(reference, mode='outdated'):
     """
     if mode not in {'outdated', 'latest', 'all'}:
         raise ValueError("Mode must be in {'outdated', 'latest', 'all'}")
-    namespace, name, version =decode_method(reference=, decode_only=True)
+    namespace, name, version = decode_method(reference, decode_only=True)
     methods = [m for m in list_methods() if m['name']==name and m['namespace']==namespace]
     versions = np.sort([m['snapshotId'] for m in r])
     print('Versions: {}'.format(', '.join(map(str, versions))))

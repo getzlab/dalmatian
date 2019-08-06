@@ -1,26 +1,25 @@
-
-from __future__ import print_function
-import pandas as pd
-import numpy as np
+from .core import *
 import subprocess
 import os
 import io
 from collections import defaultdict, namedtuple
-import firecloud.api
-from firecloud import fiss
 import functools
-import iso8601
-import pytz
 from datetime import datetime
 from threading import local
-from .core import *
-from hound import HoundClient
 import warnings
 from contextlib import contextmanager, ExitStack
 import traceback
 import sys
+import pandas as pd
+import numpy as np
+import firecloud.api
+import iso8601
+import pytz
+import requests
+from hound import HoundClient
 from agutil import status_bar, splice, byteSize
 from agutil.parallel import parallelize
+
 
 #------------------------------------------------------------------------------
 #  Extension of firecloud.api functionality using the rawls (internal) API
@@ -184,12 +183,8 @@ class WorkspaceCollection(object):
         return pd.concat(dfs, axis=0)
 
 class WorkspaceManager(object):
-    def __init__(self, namespace, workspace=None, timezone='America/New_York', credentials=None, user_project=None):
-        if workspace is None:
-            self.namespace, self.workspace = namespace.split('/')
-        else:
-            self.namespace = namespace
-            self.workspace = workspace
+    def __init__(self, reference, timezone='America/New_York', credentials=None, user_project=None):
+        self.namespace, self.workspace = reference.split('/')
         self.timezone  = timezone
         self.__credentials = credentials
         self.__user_project = user_project
@@ -218,9 +213,12 @@ class WorkspaceManager(object):
         self.hound.enable()
         return self
 
-    def create_workspace(self, wm=None):
-        """Create the workspace, or clone from another"""
-        if wm is None:
+    def create_workspace(self, parent=None):
+        """
+        Create the workspace, or clone from another
+        parent may either by a WorkspaceManager or a reference in the form "namespace/workspace"
+        """
+        if parent is None:
             r = firecloud.api.create_workspace(self.namespace, self.workspace)
             if r.status_code==201:
                 print('Workspace {}/{} successfully created.'.format(self.namespace, self.workspace))
@@ -232,12 +230,14 @@ class WorkspaceManager(object):
             else:
                 raise APIException("Failed to create Workspace", r)
         else:  # clone workspace
-            r = firecloud.api.clone_workspace(wm.namespace, wm.workspace, self.namespace, self.workspace)
+            if isinstance(parent, str):
+                parent = WorkspaceManager(parent)
+            r = firecloud.api.clone_workspace(parent.namespace, parent.workspace, self.namespace, self.workspace)
             if r.status_code == 201:
                 print('Workspace {}/{} successfully cloned from {}/{}.'.format(
-                    self.namespace, self.workspace, wm.namespace, wm.workspace))
+                    self.namespace, self.workspace, parent.namespace, parent.workspace))
                 try:
-                    self.hound.update_workspace_meta("Cloned workspace from {}/{}".format(wm.namespace, wm.workspace))
+                    self.hound.update_workspace_meta("Cloned workspace from {}/{}".format(parent.namespace, parent.workspace))
                 except:
                     print("Unable to write initial hound record", file=sys.stderr)
                 return True
@@ -271,7 +271,7 @@ class WorkspaceManager(object):
 
     def get_bucket_id(self):
         """Get the GCS bucket ID associated with the workspace"""
-        return self.get_workflow_metadata()['workspace']['bucketName']
+        return self.get_workspace_metadata()['workspace']['bucketName']
 
 
     def get_entity_types(self):
@@ -284,6 +284,7 @@ class WorkspaceManager(object):
         ))
         if r.status_code != 200:
             raise APIException("Failed to get list of entity types", r)
+        return r.json()
 
 
     def upload_entity_data(self, etype, df):
@@ -363,38 +364,41 @@ class WorkspaceManager(object):
                     print('  * {} ({} {}s)'.format(s, np.sum(sets==s), et.replace(' set','')))
             else:
                 print('Successfully imported {} {}s.'.format(df.shape[0], et))
-            with ExitStack() as stack:
-                idx = df.index if index else (df[etype+'_id'] if etype+'_id' in df.columns else None)
-                if len(df) > 100:
-                    stack.enter_context(self.hound.batch())
-                self.hound.write_log_entry(
-                    "upload",
-                    "Uploaded {} {}s".format(
-                        len(df),
-                        etype
-                    ),
-                    entities=(
-                        [os.path.join(etype, eid) for eid in idx]
-                        if idx is not None
-                        else None
-                    )
-                )
-
-                if self.hound._enabled:
-                    for eid, (name, data) in zip(idx, df.iterrows()):
-                        self.hound.update_entity_meta(
-                            etype,
-                            eid,
-                            "User uploaded new entity"
+            if self.hound._enabled:
+                if df.index.name.startswith('membership:'):
+                    self._log_entity_set_membership(etype, df)
+                else:
+                    with ExitStack() as stack:
+                        idx = df.index if index else (df[etype+'_id'] if etype+'_id' in df.columns else None)
+                        if len(df) > 100:
+                            stack.enter_context(self.hound.batch())
+                        self.hound.write_log_entry(
+                            "upload",
+                            "Uploaded {} {}s".format(
+                                len(df),
+                                etype
+                            ),
+                            entities=(
+                                [os.path.join(etype, eid) for eid in idx]
+                                if idx is not None
+                                else None
+                            )
                         )
-                        for attr, val in data.items():
-                            if attr != index_column:
-                                self.hound.update_entity_attribute(
-                                    etype,
-                                    eid,
-                                    attr,
-                                    val
-                                )
+
+                        for eid, (name, data) in zip(idx, df.iterrows()):
+                            self.hound.update_entity_meta(
+                                etype,
+                                eid,
+                                "User uploaded new entity"
+                            )
+                            for attr, val in data.items():
+                                if attr != index_column:
+                                    self.hound.update_entity_attribute(
+                                        etype,
+                                        eid,
+                                        attr,
+                                        val
+                                    )
         else:
             raise APIException('{} import failed.'.format(et.capitalize()), s)
 
@@ -446,13 +450,7 @@ class WorkspaceManager(object):
         if 'sample_set_id' in df.columns:
             set_df = pd.DataFrame(data=sample_df.index.values, index=df['sample_set_id'], columns=['sample_id'])
             set_df.index.name = 'membership:sample_set_id'
-            try:
-                hound_state = self.hound._enabled
-                self.hound.disable()
-                # uploading entities like this results in weird records
-                self.upload_entities('sample_set', set_df)
-            finally:
-                self.hound._enabled = hound_state
+            self.upload_entities('sample_set', set_df)
 
         if add_participant_samples:
             # 4) add participant.samples_
@@ -655,17 +653,18 @@ class WorkspaceManager(object):
         r = firecloud.api.update_workspace_attributes(self.namespace, self.workspace, attrs)
         if r.status_code != 200:
             raise APIException("Unable to update workspace attributes", r)
-        with ExitStack() as stack:
-            if len(attr_dict) > 100:
-                stack.enter_context(self.hound.batch())
-            self.hound.update_workspace_meta(
-                "Updating {} workspace attributes: {}".format(
-                    len(attr_dict),
-                    ', '.join(attr_dict)
+        if self.hound._enabled:
+            with ExitStack() as stack:
+                if len(attr_dict) > 100:
+                    stack.enter_context(self.hound.batch())
+                self.hound.update_workspace_meta(
+                    "Updating {} workspace attributes: {}".format(
+                        len(attr_dict),
+                        ', '.join(attr_dict)
+                    )
                 )
-            )
-            for k,v in attr_dict.items():
-                self.hound.update_workspace_attribute(k, v)
+                for k,v in attr_dict.items():
+                    self.hound.update_workspace_attribute(k, v)
 
         print('Successfully updated workspace attributes in {}/{}'.format(self.namespace, self.workspace))
         return attr_dict
@@ -742,14 +741,25 @@ class WorkspaceManager(object):
 
 
     def list_submissions(self, config=None):
-        """List all submissions from workspace"""
+        """
+        List all submissions from workspace
+        """
         submissions = firecloud.api.list_submissions(self.namespace, self.workspace)
         if submissions.status_code != 200:
             raise APIException(submissions)
         submissions = submissions.json()
 
         if config is not None:
-            submissions = [s for s in submissions if config in s['methodConfigurationName']]
+            config = config.split('/')
+            if len(config) == 1:
+                namespace = None
+                name = config[0]
+            elif len(config) >= 2:
+                namespace = config[0]
+                name = config[1]
+            if namespace is not None:
+                submissions = [s for s in submissions if s['methodConfigurationNamespace'] == namespace]
+            submissions = [s for s in submissions if s['methodConfigurationName'].startswith(name)]
 
         return submissions
 
@@ -840,14 +850,17 @@ class WorkspaceManager(object):
         return self.get_entity_status('pair_set', configuration)
 
 
-    def patch_attributes(self, cnamespace, configuration, dry_run=False, entity='sample'):
+    def patch_attributes(self, reference, dry_run=False, entity='sample'):
         """
         Patch attributes for all samples/tasks that run successfully but were not written to database.
         This includes outputs from successful tasks in workflows that failed.
+        reference may be any of the following
+        1) reference = "namespace/name"
+        2) reference = "name" (if name is unique)
         """
 
         # get list of expected outputs
-        r = self.get_config(cnamespace, configuration)
+        r = self.get_config(reference)
         output_map = {i.split('.')[-1]:j.split('this.')[-1] for i,j in r['outputs'].items()}
         columns = list(output_map.values())
 
@@ -861,7 +874,7 @@ class WorkspaceManager(object):
                 incomplete_df = pd.DataFrame(index=samples_df.index, columns=columns)
 
             # get workflow status for all submissions
-            sample_status_df = self.get_sample_status(configuration)
+            sample_status_df = self.get_sample_status(reference)
 
             # make sure successful workflows were all written to database
             error_ix = incomplete_df.loc[sample_status_df.loc[incomplete_df.index, 'status']=='Succeeded'].index
@@ -1120,10 +1133,11 @@ class WorkspaceManager(object):
     #-------------------------------------------------------------------------
     #  Methods for manipulating configurations
     #-------------------------------------------------------------------------
-    def list_configs(self, include_docstore=False):
+    def list_configs(self, include_docstore=True):
         """
         List configurations in workspace
         """
+        firecloud.api._fiss_agent_header() # Ensure session object available
         r = getattr(firecloud.api, '__SESSION').get(
             'https://api.firecloud.org/api/workspaces/{}/{}/methodconfigs{}'.format(
                 self.namespace,
@@ -1136,12 +1150,49 @@ class WorkspaceManager(object):
         return r.json()
 
 
-    def get_config(self, cnamespace, config):
-        """Get workspace configuration JSON"""
-        r = firecloud.api.get_workspace_config(self.namespace, self.workspace, cnamespace, config)
-        if r.status_code != 200:
-            raise APIException('Failed to get configuration {}/{}'.format(cnamespace, config), r)
-        return r.json()
+    def get_config(self, reference):
+        """
+        Get workspace configuration JSON
+        reference may be either of the following
+        1) reference = "namespace/name"
+        2) reference = "name" (if name is unique)
+        """
+        data = reference.split('/')
+        if len(data) == 2:
+            namespace, name = data
+            r = firecloud.api.get_workspace_config(self.namespace, self.workspace, namespace, name)
+            if r.status_code == 404:
+                raise ConfigNotFound("No such config {}/{} in workspace {}/{}".format(
+                    namespace,
+                    name,
+                    self.namespace,
+                    self.workspace
+                ))
+            if r.status_code != 200:
+                raise APIException('Failed to get configuration {}/{}'.format(namespace, name), r)
+            return r.json()
+        elif len(data) == 1:
+            # name only, must list configs
+            candidates = [
+                cfg for cfg in self.list_configs()
+                if cfg['name'] == reference
+            ]
+            if len(candidates) > 1:
+                raise ConfigNotUnique("Multiple configurations with name {} in workspace {}/{}".format(
+                    reference,
+                    self.namespace,
+                    self.workspace
+                ))
+            elif len(candidates) == 0:
+                raise ConfigNotFound("No configurations with name {} in workspace {}/{}".format(
+                    reference,
+                    self.namespace,
+                    self.workspace
+                ))
+            return self.get_config("{}/{}".format(
+                candidates[0]['namespace'],
+                candidates[0]['name']
+            ))
 
 
     def get_configs(self, latest_only=False):
@@ -1157,21 +1208,28 @@ class WorkspaceManager(object):
         return df
 
 
-    def import_config(self, cnamespace, cname=None):
-        """Import configuration from repository"""
+    def import_config(self, reference):
+        """
+        Import configuration from repository
+        reference may be any of the following
+        1) reference = "namespace/name/version"
+        2) reference = "namespace/name" (uses latest version)
+        3) reference = "name" (if name is unique)
+        """
         # get latest snapshot
-        c = get_config(cnamespace, cname)
+        c = get_config(reference)
         if len(c)==0:
-            raise ValueError('Configuration "{}/{}" not found (name must match exactly).'.format(cnamespace, cname))
+            raise ValueError('Configuration "{}" not found (name must match exactly).'.format(reference))
         c = c[np.argmax([i['snapshotId'] for i in c])]
         r = firecloud.api.copy_config_from_repo(self.namespace, self.workspace,
-            cnamespace, cname, c['snapshotId'], cnamespace, cname)
+            c['namespace'], c['name'], c['snapshotId'], c['namespace'], c['name'])
         if r.status_code == 201:
-            print('Successfully imported configuration "{}/{}" (SnapshotId {})'.format(cnamespace, cname, c['snapshotId']))
+            print('Successfully imported configuration "{}/{}" (SnapshotId {})'.format(c['namespace'], c['name'], c['snapshotId']))
         else:
-            raise APIException(r)
+            raise APIException("Unable to import configuration", r)
 
-    def update_config(self, json_body):
+
+    def update_config(self, config):
         """
         Create or update a method configuration (separate API calls)
 
@@ -1180,69 +1238,97 @@ class WorkspaceManager(object):
            'name': config_name,
            'rootEntityType' : entity,
            'methodRepoMethod': {'methodName':method_name, 'methodNamespace':method_namespace, 'methodVersion':version},
-           'methodNamespace': method_namespace,
            'inputs':  {},
            'outputs': {},
            'prerequisites': {},
            'deleted': False
         }
 
+        methodRepoMethod.methodVersion may be set to "latest", which will be automatically
+        set to the current latest version. For dockstore methods, this will also
+        update methodRepoMethod.methodUri accordingly
+
         """
+        if "namespace" not in config or "name" not in config:
+            raise ValueError("Config missing required keys 'namespace' and 'name'")
+        if config['methodRepoMethod']['methodVersion'] == 'latest':
+            # Autofill config version
+            if config['methodRepoMethod']['sourceRepo'] == 'agora':
+                config['methodRepoMethod']['methodVersion'] = get_method_version(
+                    '{}/{}'.join(
+                        config['methodRepoMethod']['methodNamespace'],
+                        config['methodRepoMethod']['methodName']
+                    )
+                )
+            else:
+                config['methodRepoMethod'] = get_dockstore_method_version(
+                    config['methodRepoMethod']['methodPath']
+                )['methodRepoMethod']
+        identifier = '{}/{}'.format(config['namespace'], config['name'])
         configs = self.list_configs()
         self.hound.write_log_entry(
             'other',
-            "Uploaded/Updated method configuration: {}/{}".format(
-                json_body['namespace'],
-                json_body['name']
+            "Uploaded/Updated method configuration: {}".format(
+                identifier
             )
         )
-        if json_body['name'] not in [m['name'] for m in configs]:
+        if identifier not in ["{}/{}".format(m['namespace'], m['name']) for m in configs]:
             # configuration doesn't exist -> name, namespace specified in json_body
-            r = firecloud.api.create_workspace_config(self.namespace, self.workspace, json_body)
+            r = firecloud.api.create_workspace_config(self.namespace, self.workspace, config)
             if r.status_code == 201:
-                print('Successfully added configuration: {}'.format(json_body['name']))
+                print('Successfully added configuration: {}'.format(identifier))
             elif r.status_code >= 400:
-                raise APIException(r)
+                raise APIException("Failed to add new configuration", r)
             else:
                 print(r.text)
         else:
             r = firecloud.api.update_workspace_config(self.namespace, self.workspace,
-                    json_body['namespace'], json_body['name'], json_body)
+                    config['namespace'], config['name'], config)
             if r.status_code == 200:
-                print('Successfully updated configuration {}/{}'.format(json_body['namespace'], json_body['name']))
+                print('Successfully updated configuration {}'.format(identifier))
             elif r.status_code >= 400:
-                raise APIException(r)
+                raise APIException("Failed to update configuration", r)
             else:
                 print(r.text)
 
 
-    def copy_config(self, wm, cnamespace, config):
-        """Copy configuration from another workspace"""
-        self.update_config(wm.get_config(cnamespace, config))
+    def copy_config(self, source, reference):
+        """
+        Copy configuration from another workspace
+        source may be a WorkspaceManager or a reference in "namespace/workspace" format
+        config reference may be either of the following
+        1) reference = "namespace/name"
+        2) reference = "name" (if name is unique)
+        """
+        if isinstance(source, str):
+            source = WorkspaceManager(source)
+        self.update_config(source.get_config(reference))
 
 
-    def publish_config(self, from_cnamespace, from_config, to_cnamespace=None, to_config=None, public=False):
-        """Copy configuration to repository"""
-        if to_cnamespace is None:
-            to_cnamespace = from_cnamespace
-        if to_config is None:
-            to_config = from_config
-
+    def publish_config(self, src_reference, dest_reference, public=False):
+        """
+        Copy configuration to repository
+        references may be either of the following
+        1) reference = "namespace/name"
+        2) reference = "name" (if name is unique)
+        """
         # check whether prior version exists
-        r = get_config(to_cnamespace, to_config)
+        r = get_config(dest_reference)
         old_version = None
         if r:
             old_version = np.max([m['snapshotId'] for m in r])
-            print('Configuration {}/{} exists. SnapshotID: {}'.format(
-                to_cnamespace, to_config, old_version))
+            print('Configuration {} exists. SnapshotID: {}'.format(
+                dest_reference, old_version))
 
         # copy config to repo
+        from_cnamespace, from_config, _ = decode_config(src_reference, decode_only=True)
+        to_cnamespace, to_config, _ = decode_config(dest_reference, decode_only=True)
         r = firecloud.api.copy_config_to_repo(self.namespace, self.workspace,
                 from_cnamespace, from_config, to_cnamespace, to_config)
         if r.status_code == 200:
             print("Successfully copied {}/{}. New SnapshotID: {}".format(to_cnamespace, to_config, r.json()['snapshotId']))
         elif r.status_code >= 400:
-            raise APIException(r)
+            raise APIException("Unable to copy configuration", r)
         else:
             print(r.text)
 
@@ -1270,31 +1356,40 @@ class WorkspaceManager(object):
         r = self.list_configs()
         r = [i for i in r if i['name']==config_name][0]['methodRepoMethod']
         # method repo version
-        mrversion = get_method_version(r['methodNamespace'], r['methodName'])
+        mrversion = get_method_version("{}/{}".format(r['methodNamespace'], r['methodName']))
         print('Method for config. {}: {} version {} (latest: {})'.format(config_name, r['methodName'], r['methodVersion'], mrversion))
         return r['methodVersion']
 
 
-    def delete_config(self, cnamespace, config):
-        """Delete workspace configuration"""
-        r = firecloud.api.delete_workspace_config(self.namespace, self.workspace, cnamespace, config)
+    def delete_config(self, reference):
+        """
+        Delete workspace configuration
+        reference may be either of the following
+        1) reference = "namespace/name"
+        2) reference = "name" (if name is unique)
+        """
+        config = self.get_config(reference)
+        r = firecloud.api.delete_workspace_config(self.namespace, self.workspace, config['namespace'], config['name'])
         if r.status_code == 204:
             self.hound.write_log_entry(
                 'other',
                 "Deleted method configuration: {}/{}".format(
-                    cnamespace,
-                    config
+                    config['namespace'],
+                    config['name']
                 )
             )
-            print('Successfully deleted configuration {}/{}'.format(cnamespace, config))
+            print('Successfully deleted configuration {}/{}'.format(config['namespace'], config['name']))
         elif r.status_code >= 400:
-            raise APIException(r)
+            raise APIException("Unable to delete configuration {}/{}".format(config['namespace'], config['name']), r)
         else:
             print(r.text)
 
     #-------------------------------------------------------------------------
     #  Methods for querying entities
     #-------------------------------------------------------------------------
+    def _get_entities_internal(self, etype):
+        return getattr(self, 'get_{}s'.format(etype))()
+
     def _get_entities_query(self, etype, page, page_size=1000):
         """Wrapper for firecloud.api.get_entities_query"""
         r = firecloud.api.get_entities_query(self.namespace, self.workspace,
@@ -1302,7 +1397,7 @@ class WorkspaceManager(object):
         if r.status_code == 200:
             return r.json()
         else:
-            raise APIException(r)
+            raise APIException("Unable to query {}s".format(etype), r)
 
     def get_entities(self, etype, page_size=1000):
         """Paginated query replacing get_entities_tsv()"""
@@ -1431,7 +1526,7 @@ class WorkspaceManager(object):
                 )
                 return True
             elif r.status_code >= 400:
-                raise APIException(r)
+                raise APIException("Unable to update {}_set".format(etype), r)
             else:
                 print(r.text)
         else:
@@ -1441,13 +1536,6 @@ class WorkspaceManager(object):
             )
             if len(set_df):
                 self.upload_entities('{}_set'.format(etype), set_df, index=False)
-                self.hound.update_entity_attribute(
-                    '{}_set'.format(etype),
-                    set_id,
-                    '{}s'.format(etype),
-                    [*entity_ids],
-                    "Uploading new {}_set".format(etype)
-                )
             else:
                 # Upload empty set
                 set_df = pd.DataFrame(index=pd.Index([set_id], name='{}_set_id'.format(etype)))
@@ -1506,7 +1594,7 @@ class WorkspaceManager(object):
                 [*sample_set_ids]
             )
         elif r.status_code >= 400:
-            raise APIException(r)
+            raise APIException("Unable to create super-set", r)
         else:
             print(r.text)
 
@@ -1571,24 +1659,25 @@ class WorkspaceManager(object):
         r = _batch_update_entities(self.namespace, self.workspace, attr_list)
         if r.status_code == 204:
             print(msg)
-            for obj in attr_list:
-                self.hound.update_entity_meta(
-                    etype,
-                    obj['name'],
-                    "Deleting {} attributes: {}".format(
-                        len(obj['operations']),
-                        ', '.join(attr['attributeName'] for attr in obj['operations'])
-                    )
-                )
-                for attr in obj['operations']:
-                    self.hound.update_entity_attribute(
+            if self.hound._enabled:
+                for obj in attr_list:
+                    self.hound.update_entity_meta(
                         etype,
                         obj['name'],
-                        attr['attributeName'],
-                        None
+                        "Deleting {} attributes: {}".format(
+                            len(obj['operations']),
+                            ', '.join(attr['attributeName'] for attr in obj['operations'])
+                        )
                     )
+                    for attr in obj['operations']:
+                        self.hound.update_entity_attribute(
+                            etype,
+                            obj['name'],
+                            attr['attributeName'],
+                            None
+                        )
         elif r.status_code >= 400:
-            raise APIException(r)
+            raise APIException("Unable to delete attributes", r)
         else:
             print(r.text)
         # except:  # rawls API not available
@@ -1623,24 +1712,25 @@ class WorkspaceManager(object):
         r = firecloud.api.delete_entity_type(self.namespace, self.workspace, etype, entity_ids)
         if r.status_code == 204:
             print('{}(s) {} successfully deleted.'.format(etype.replace('_set', ' set').capitalize(), entity_ids))
-            self.hound.write_log_entry(
-                'upload',
-                "Deleting {} {}s".format(
-                    len(entity_ids),
-                    etype
-                ),
-                entities=[
-                    os.path.join(etype, eid) for eid in entity_ids
-                ]
-            )
-            for eid in entity_ids:
-                self.hound.update_entity_meta(
-                    etype,
-                    eid,
-                    "Deleted entity"
+            if self.hound._enabled:
+                self.hound.write_log_entry(
+                    'upload',
+                    "Deleting {} {}s".format(
+                        len(entity_ids),
+                        etype
+                    ),
+                    entities=[
+                        os.path.join(etype, eid) for eid in entity_ids
+                    ]
                 )
+                for eid in entity_ids:
+                    self.hound.update_entity_meta(
+                        etype,
+                        eid,
+                        "Deleted entity"
+                    )
         elif r.status_code >= 400:
-            raise APIException(r)
+            raise APIException("Unable to delete entity", r)
         else:
             print(r.text)
 
@@ -1655,23 +1745,24 @@ class WorkspaceManager(object):
         r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'sample', sample_ids)
         if r.status_code == 204:
             print('Sample(s) {} successfully deleted.'.format(sample_ids))
-            self.hound.write_log_entry(
-                'upload',
-                "Deleting {} samples".format(
-                    len(sample_ids),
-                ),
-                entities=[
-                    os.path.join('sample', eid) for eid in sample_ids
-                ]
-            )
-            for eid in sample_ids:
-                self.hound.update_entity_meta(
-                    'sample',
-                    eid,
-                    "Deleted entity"
+            if self.hound._enabled:
+                self.hound.write_log_entry(
+                    'upload',
+                    "Deleting {} samples".format(
+                        len(sample_ids),
+                    ),
+                    entities=[
+                        os.path.join('sample', eid) for eid in sample_ids
+                    ]
                 )
+                for eid in sample_ids:
+                    self.hound.update_entity_meta(
+                        'sample',
+                        eid,
+                        "Deleted entity"
+                    )
         elif r.status_code >= 400:
-            raise APIException(r)
+            raise APIException("Unable to delete samples", r)
 
         elif r.status_code==409 and delete_dependencies:
             # delete participant dependencies
@@ -1691,7 +1782,7 @@ class WorkspaceManager(object):
                     attrs = [firecloud.api._attr_set(i,j) for i,j in attr_dict.items()]
                     r = firecloud.api.update_entity(self.namespace, self.workspace, 'participant', k, attrs)
                     if r.status_code != 200:
-                        raise APIException(r)
+                        raise APIException("Unable to delete samples", r)
                     self.hound.update_entity_attribute(
                         'participant',
                         k,
@@ -1712,23 +1803,24 @@ class WorkspaceManager(object):
             r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'sample', sample_ids)
             if r.status_code == 204:
                 print('Sample(s) {} successfully deleted.'.format(sample_ids))
-                self.hound.write_log_entry(
-                    'upload',
-                    "Deleting {} samples".format(
-                        len(sample_ids),
-                    ),
-                    entities=[
-                        os.path.join('sample', eid) for eid in sample_ids
-                    ]
-                )
-                for eid in sample_ids:
-                    self.hound.update_entity_meta(
-                        'sample',
-                        eid,
-                        "Deleted entity"
+                if self.hound._enabled:
+                    self.hound.write_log_entry(
+                        'upload',
+                        "Deleting {} samples".format(
+                            len(sample_ids),
+                        ),
+                        entities=[
+                            os.path.join('sample', eid) for eid in sample_ids
+                        ]
                     )
+                    for eid in sample_ids:
+                        self.hound.update_entity_meta(
+                            'sample',
+                            eid,
+                            "Deleted entity"
+                        )
             elif r.status_code >= 400:
-                raise APIException(r)
+                raise APIException("Unable to delete samples", r)
             else:
                 print(r.text)
         else:
@@ -1745,32 +1837,34 @@ class WorkspaceManager(object):
         r = firecloud.api.delete_entity_type(self.namespace, self.workspace, 'participant', participant_ids)
         if r.status_code == 204:
             print('Participant(s) {} successfully deleted.'.format(participant_ids))
-            for pid in participant_ids:
-                self.hound.update_entity_meta(
-                    'participant',
-                    pid,
-                    "Deleted entity"
-                )
+            if self.hound._enabled:
+                for pid in participant_ids:
+                    self.hound.update_entity_meta(
+                        'participant',
+                        pid,
+                        "Deleted entity"
+                    )
         elif r.status_code == 409:
             if delete_dependencies:
                 r2 = firecloud.api.delete_entities(self.namespace, self.workspace, r.json())
                 if r2.status_code == 204:
                     print('Participant(s) {} and dependent entities successfully deleted.'.format(participant_ids))
-                    for entity in r.json():
-                        self.hound.update_entity_meta(
-                            entity['entityType'],
-                            entity['entityName'],
-                            "Deleted entity",
-                            (
-                                None
-                                if entity['entityType'] == 'participant'
-                                else "<Automated> Removing {}s from participant prior to sample deletion".format(
-                                    entity['entityType']
+                    if self.hound._enabled:
+                        for entity in r.json():
+                            self.hound.update_entity_meta(
+                                entity['entityType'],
+                                entity['entityName'],
+                                "Deleted entity",
+                                (
+                                    None
+                                    if entity['entityType'] == 'participant'
+                                    else "<Automated> Removing {}s from participant prior to sample deletion".format(
+                                        entity['entityType']
+                                    )
                                 )
                             )
-                        )
                 elif r2.status_code >= 400:
-                    raise APIException(r2)
+                    raise APIException("Unable to delete participants", r2)
                 else:
                     print(r2.text)
             else:
@@ -1800,6 +1894,7 @@ class WorkspaceManager(object):
         return sample_set_df[sample_set_df['samples'].apply(lambda x: sample_id in x)].index.tolist()
 
 
+    # FIXME: Doesn't do anything
     def purge_unassigned(self, attribute=None, bucket_files=None, entities_df=None, ext=None):
         """
         Delete any files that don't match attributes in the data model (e.g., from prior/outdated runs)
@@ -1927,25 +2022,26 @@ class WorkspaceManager(object):
                 print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
             else:
                 print("Successfully updated attribute '{}' for {} {}s.".format(attrs.name, len(attrs), etype))
-            with self.hound.batch():
-                for obj in attr_list:
-                    self.hound.update_entity_meta(
-                        etype,
-                        obj['name'],
-                        "Updating {} attributes: {}".format(
-                            len(obj['operations']),
-                            ', '.join(attr['attributeName'] for attr in obj['operations'])
-                        )
-                    )
-                    for attr in obj['operations']:
-                        self.hound.update_entity_attribute(
+            if self.hound._enabled:
+                with self.hound.batch():
+                    for obj in attr_list:
+                        self.hound.update_entity_meta(
                             etype,
                             obj['name'],
-                            attr['attributeName'],
-                            attr['addUpdateAttribute']
+                            "Updating {} attributes: {}".format(
+                                len(obj['operations']),
+                                ', '.join(attr['attributeName'] for attr in obj['operations'])
+                            )
                         )
+                        for attr in obj['operations']:
+                            self.hound.update_entity_attribute(
+                                etype,
+                                obj['name'],
+                                attr['attributeName'],
+                                attr['addUpdateAttribute']
+                            )
         elif r.status_code >= 400:
-            raise APIException(r)
+            raise APIException("Unable to update entity attributes", r)
         else:
             print(r.text)
         # except:  # revert to public API
@@ -1957,10 +2053,21 @@ class WorkspaceManager(object):
         #         print(r.text)
 
 
-    def create_submission(self, cnamespace, config, entity, etype, expression=None, use_callcache=True):
-        """Create submission"""
+    def create_submission(self, reference, entity, etype=None, expression=None, use_callcache=True):
+        """
+        Create submission
+        Reference may be either of the following:
+        1) reference = "namespace/name"
+        2) reference = "name" (only if unique)
+
+        If etype is not provided, it is assumed to be the same type as the config's rootEntityType.
+        If preflight is enabled, dalmatian will check that the entity exists
+        """
+        config = self.get_config(reference)
+        if etype is None:
+            etype = config['rootEntityType']
         r = firecloud.api.create_submission(self.namespace, self.workspace,
-            cnamespace, config, entity, etype, expression=expression, use_callcache=use_callcache)
+            config['namespace'], config['name'], entity, etype, expression=expression, use_callcache=use_callcache)
         if r.status_code == 201:
             submission_id = r.json()['submissionId']
             print('Successfully created submission {}.'.format(submission_id))
@@ -1972,8 +2079,8 @@ class WorkspaceManager(object):
                     " Configuration: {}/{}, Entity: {}/{}, Expression: {}"
                 ).format(
                     submission_id,
-                    cnamespace,
-                    config,
+                    config['namespace'],
+                    config['name'],
                     etype,
                     entity,
                     'null' if expression is None else expression
@@ -1983,5 +2090,233 @@ class WorkspaceManager(object):
                 ]
             )
             return submission_id
-        else:
-            raise APIException(r)
+        raise APIException("Unable to start submission", r)
+
+#-------------------------------------------------------------------------
+# Provenance
+#-------------------------------------------------------------------------
+
+    def _log_entity_set_membership(self, etype, df):
+        """
+        Internal Use.
+        Creates proper provenance logs for membership: type uploads
+        """
+        column = df.columns[0]
+        members = {
+            set_id:df[column][set_id].to_list()
+            for set_id in  np.unique(df.index)
+        }
+        with ExitStack() as stack:
+            if len(members) > 100:
+                stack.enter_context(self.hound.batch())
+
+            for set_id, entities in members.items():
+                self.hound.update_entity_meta(
+                    etype+'_set',
+                    set_id,
+                    "User updated set members"
+                )
+                self.hound.update_entity_attribute(
+                    etype+'_set',
+                    set_id,
+                    etype+'s',
+                    entities
+                )
+
+    def _check_conflicting_value(self, value, record):
+        if isinstance(value, np.ndarray):
+            value = list(value)
+        rvalue = record.attributeValue if record is not None else None
+        if isinstance(rvalue, np.ndarray):
+            rvalue = list(rvalue)
+        if record is None or np.all(value == rvalue) or (np.all(pd.isna(value)) and np.all(pd.isna(rvalue))):
+            return record
+        return ProvenanceConflict(value, record)
+
+    def _build_provenance_series(self, etype, entity):
+        # Path 1: enumerate all updates under the given entity then filter
+        # This is 3x faster than path 2, if there is not a long attribute history
+        return {
+            **{
+                attr: None
+                for attr in entity.index
+            },
+            **{
+                entry.attributeName: self._check_conflicting_value(
+                    entity[entry.attributeName] if entry.attributeName in entity.index else None,
+                    entry
+                )
+                for entry in self.hound.ientity_attribute_provenance(etype, entity.name)
+            }
+        }
+
+    def attribute_provenance(self):
+        """
+        Returns a provenance dictionary for the workspace
+        { attributeName: Provenance }
+        If Hound cannot find an entry for a given attribute, it will be recorded
+        as None in the dictionary
+        """
+        return {
+            attr: self._check_conflicting_value(
+                value,
+                self.hound.latest(
+                    self.hound.get_entries(os.path.join('hound', 'workspace', attr)),
+                    'updates'
+                )
+            )
+            for attr, value in self.get_attributes().items()
+        }
+
+    def entity_provenance(self, etype, df=None):
+        """
+        Maps the given df/series to contain provenance objects
+        etype: The entity type
+        df: (optional) pd.DataFrame or pd.Series of entity metadata.
+        For a series: Name must be entity_id, index must contain desired attributes
+        For a dataframe: index must contain entity_ids, columns must contain desired attributes
+        If not provided, defaults to the entire entity dataframe for the entity type
+        Return value will be of the same type and shape as the input df
+        If hound cannot find an entry for a given attribute, it will be set to
+        None in the output
+        """
+        if df is None:
+            df = self._get_entities_internal(etype)
+        if isinstance(df, pd.DataFrame):
+            return df.copy().apply(
+                lambda row: pd.Series(data=self._build_provenance_series(etype, row), index=row.index.copy(), name=row.name),
+                axis='columns'
+            )
+        elif isinstance(df, pd.Series):
+            return pd.Series(
+                data=self._build_provenance_series(etype, df),
+                index=df.index.copy(),
+                name=df.name
+            )
+        raise TypeError("df must be a pd.Series or pd.DataFrame")
+
+    def synchronize_hound_records(self):
+        """
+        Slow operation
+        Updates conflicting or missing attributes in hound to match their current
+        live value.
+        Updates workspace attributes and all entity attributes
+        """
+        if not self.hound._enabled:
+            raise ValueError("Hound is disabled")
+        with self.hound.with_reason("<Automated> Synchronizing hound with Firecloud"):
+            self.hound.write_log_entry(
+                'other',
+                "Starting database sync with FireCloud"
+            )
+            print("Checking workspace attributes")
+            attributes = self.get_attributes()
+            updates = {
+                attr: attributes[attr]
+                for attr, prov in self.attribute_provenance().items()
+                if prov is None or isinstance(prov, ProvenanceConflict)
+            }
+            if len(updates):
+                print("Updating", len(updates), "hound attribute records")
+                with self.hound.batch():
+                    self.hound.update_workspace_meta(
+                        "Updating {} workspace attributes: {}".format(
+                            len(updates),
+                            ', '.join(updates)
+                        )
+                    )
+                    for k,v in updates.items():
+                        self.hound.update_workspace_attribute(k, v)
+            for etype in self.get_entity_types():
+                with self.hound.batch():
+                    print("Checking", etype, "attributes")
+                    live_df = self._get_entities_internal(etype)
+                    for eid, data in self.entity_provenance(etype, live_df).iterrows():
+                        updates = {
+                            attr for attr, val in data.items()
+                            if val is None or isinstance(val, ProvenanceConflict)
+                        }
+                        if len(updates):
+                            print("Updating", len(updates), "attributes for", etype, eid)
+                            self.hound.update_entity_meta(
+                                etype,
+                                eid,
+                                "Updating {} attributes: {}".format(
+                                    len(updates),
+                                    ', '.join(updates)
+                                )
+                            )
+                            for attr in updates:
+                                self.hound.update_entity_attribute(
+                                    etype,
+                                    eid,
+                                    attr,
+                                    live_df[attr][eid]
+                                )
+
+
+#-------------------------------------------------------------------------
+# Misc
+#-------------------------------------------------------------------------
+
+    def get_acl(self):
+        """
+        Returns the current FireCloud ACL settings for the workspace
+        """
+        with set_timeout(DEFAULT_LONG_TIMEOUT):
+            r = firecloud.api.get_workspace_acl(self.namespace, self.workspace)
+            if r.status_code != 200:
+                raise APIException("Failed to get the workspace ACL", r)
+            return r.json()['acl']
+
+    @staticmethod
+    def _parse_implied_permissions(acl):
+        """
+        accessLevel may be a string (one of the allowed access levels)
+        or a dictionary (see update_acl)
+        """
+        if isinstance(acl, str):
+            acl = {
+                'accessLevel': acl,
+                'canShare': acl == 'OWNER',
+                'canCompute': acl in {'OWNER', 'WRITER'}
+            }
+        if len({'accessLevel', 'canShare', 'canCompute'} & set(acl.keys())):
+            raise TypeError("{} in illegal format".format(acl))
+        if not acl['accessLevel'] in {'NO ACCESS', 'READER', 'WRITER', 'OWNER'}:
+            raise ValueError("Access Level '{}' not allowed".format(acl['accessLevel']))
+        if acl['accessLevel'] == 'NO ACCESS' and (acl['canShare'] or acl['canCompute']):
+            raise ValueError("Cannot allow sharing or compute when setting NO ACCESS")
+        return acl
+
+
+    def update_acl(self, acl):
+        """
+        Sets the ACL. Provide a dictionary of email -> access level
+        Permissions levels:
+        * "NO ACCESS"
+        * "READER"
+        * "WRITER" (Implies compute permissions)
+        * "OWNER" (Implies compute and share permissions)
+        ex: {"email": "WRITER"}
+        You can override the implied permissions by setting the email to a dictionary:
+        ex: {"email": {"accessLevel": "WRITER", "canShare": False, "canCompute": True}}
+        """
+        with set_timeout(DEFAULT_LONG_TIMEOUT):
+            r = firecloud.api.update_workspace_acl(
+                self.namespace,
+                self.workspace,
+                [
+                    {
+                        'email': email,
+                        **self._parse_implied_permissions(level)
+                    }
+                    for email, level in acl.items()
+                ]
+            )
+            if r.status_code != 200:
+                raise APIException("Failed to update workspace ACL", r)
+            self.hound.update_workspace_meta(
+                "Updated ACL: {}".format(repr(acl))
+            )
+            return r.json()
