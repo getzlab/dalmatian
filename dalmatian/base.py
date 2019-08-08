@@ -1380,8 +1380,6 @@ class LegacyWorkspaceManager(object):
                     eid,
                     "Deleted entity"
                 )
-        elif r.status_code >= 400:
-            raise APIException(r)
 
         elif r.status_code==409 and delete_dependencies:
             # delete participant dependencies
