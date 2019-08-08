@@ -4,6 +4,8 @@ import os, sys, json
 import subprocess
 from datetime import datetime
 from collections import Iterable
+from threading import local
+from contextlib import contextmanager
 import pandas as pd
 import numpy as np
 import firecloud.api
@@ -11,7 +13,7 @@ import iso8601
 import binascii, base64
 import argparse
 import multiprocessing as mp
-from functools import lru_cache
+from functools import lru_cache, wraps
 from agutil.parallel import parallelize2
 from google.cloud import storage
 import requests
@@ -25,15 +27,18 @@ class APIException(ValueError):
     """
     def __init__(self, *args, **kwargs):
         if len(args)==2 and isinstance(args[0], str) and isinstance(args[1], requests.Response):
+            self.response = args[1]
             return super().__init__(
                 "{}: ({}) : {}".format(args[0], args[1].status_code, args[1].text),
                 **kwargs
             )
         elif len(args)==1 and isinstance(args[0], requests.Response):
+            self.response = args[0]
             return super().__init__(
                 "({}) : {}".format(args[0].status_code, args[0].text),
                 **kwargs
             )
+        self.response = None
         return super().__init__(
             *args,
             **kwargs
@@ -50,6 +55,73 @@ def assert_status_code(response, condition, message=None):
         if message is not None:
             raise APIException(message, response)
         raise APIException(response)
+
+
+#------------------------------------------------------------------------------
+# Wrapper to allow control of FISS timeouts
+#------------------------------------------------------------------------------
+
+timeout_state = local()
+
+# For legacy methods or non-cached operations, the timeout will be None (infinite)
+DEFAULT_LONG_TIMEOUT = 30 # Seconds to wait if a value is not cached
+DEFAULT_SHORT_TIMEOUT = 5 # Seconds to wait if a value is already cached
+
+@contextmanager
+def set_timeout(n):
+    """
+    Context Manager:
+    Temporarily sets a timeout on all firecloud requests within context
+    Resets timeout on context exit
+    Thread safe! (Each thread has an independent timeout)
+    """
+    try:
+        if not hasattr(timeout_state, 'timeout'):
+            timeout_state.timeout = None
+        old_timeout = timeout_state.timeout
+        timeout_state.timeout = n
+        yield
+    finally:
+        timeout_state.timeout = old_timeout
+
+# Generate the fiss agent header
+
+@wraps(firecloud.api._fiss_agent_header)
+def _firecloud_api_timeout_monkey_patcher(headers=None):
+    """
+    Monkey Patcher to apply allow external timeout control of Firecloud API
+    """
+    # 1) call the actual _fiss_agent_header to initialize the session
+    headers = _firecloud_api_timeout_monkey_patcher.__wrapped__(headers)
+    # 2) Get a reference to the underlying request method
+    __CORE_SESSION_REQUEST__ = firecloud.api.__SESSION.request
+    if hasattr(__CORE_SESSION_REQUEST__, '__wrapped__'):
+        __CORE_SESSION_REQUEST__ = __CORE_SESSION_REQUEST__.__wrapped__
+    # 3) Wrap the request method with our timeout wrapper
+    @wraps(__CORE_SESSION_REQUEST__)
+    def _firecloud_api_timeout_wrapper(*args, **kwargs):
+        """
+        Wrapped version of the fiss reusable session request method
+        Applies a default timeout based on the current thread's timeout value
+        Default timeout can be overridden by kwargs
+        """
+        if not hasattr(timeout_state, 'timeout'):
+            timeout_state.timeout = None
+        return __CORE_SESSION_REQUEST__(
+            *args,
+            **{
+                **{'timeout': timeout_state.timeout},
+                **kwargs
+            }
+        )
+
+    firecloud.api.__SESSION.request = _firecloud_api_timeout_wrapper
+    # 4) Unwrap _fiss_agent_header. We don't need to monkey patch anymore
+    if hasattr(firecloud.api._fiss_agent_header, '__wrapped__'):
+        firecloud.api._fiss_agent_header = firecloud.api._fiss_agent_header.__wrapped__
+    return headers
+
+firecloud.api._fiss_agent_header = _firecloud_api_timeout_monkey_patcher
 
 # =============
 # Reference utilities for decoding method and config references
@@ -707,7 +779,14 @@ def get_wdl(reference):
     Takes arguments in any of the following formats:
     1) reference = "namespace/name/version"
     2) reference = "namespace/name"
+    3) reference = "dockstore.org/namespace/name/version"
+    4) reference = "dockstore.org/namespace/name" (uses latest version)
     """
+    if reference.startswith('dockstore.org'):
+        version = get_dockstore_method_version(reference)
+        for f in version['sourceFiles']:
+            if f['absolutePath'] == version['workflow_path']:
+                return f['content']
     return get_method_metadata(reference)['payload']
 
 
