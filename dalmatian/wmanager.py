@@ -1751,8 +1751,6 @@ class WorkspaceManager(object):
                         eid,
                         "Deleted entity"
                     )
-        elif r.status_code >= 400:
-            raise APIException("Unable to delete samples", r)
 
         elif r.status_code==409 and delete_dependencies:
             # delete participant dependencies
@@ -1813,6 +1811,8 @@ class WorkspaceManager(object):
                 raise APIException("Unable to delete samples", r)
             else:
                 print(r.text)
+        elif r.status_code >= 400:
+            raise APIException("Unable to delete samples", r)
         else:
             print(r.text)
 
