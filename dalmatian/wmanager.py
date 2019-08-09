@@ -1864,7 +1864,7 @@ class WorkspaceManager(object):
             print(r.text)
 
 
-    def delete_pair_set(self, pair_id):
+    def delete_pair(self, pair_id):
         """Delete pair(s)"""
         self.delete_entity('pair', pair_id)
 
