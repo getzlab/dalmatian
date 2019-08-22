@@ -18,6 +18,8 @@ from agutil.parallel import parallelize2
 from google.cloud import storage
 import requests
 import urllib
+import random
+import time
 
 # Collection of high-level wrapper functions for FireCloud API
 
@@ -995,7 +997,7 @@ def strict_getblob(gs_path, credentials=None, user_project=None):
         raise FileNotFoundError("No such blob: "+gs_path)
     return blob
 
-def copyblob(src, dest, credentials=None, user_project=None):
+def copyblob(src, dest, credentials=None, user_project=None, max_backoff_time=5):
     """
     Copy blob from src -> dest
     src and dest may either be a gs:// path or a premade blob object
@@ -1005,11 +1007,23 @@ def copyblob(src, dest, credentials=None, user_project=None):
     if isinstance(dest, str):
         dest = getblob(dest, credentials, user_project)
     token, progress, total = dest.rewrite(src)
+    n = 0
     while token is not None:
-        token, progress, total = dest.rewrite(src, token)
+        try:
+            token, progress, total = dest.rewrite(src, token)
+            if n > 0:
+                # After a successful block, if we encountered failures, sleep 1 second
+                time.sleep(1)
+        except (storage.blob.exceptions.InternalServerError, storage.blob.exceptions.TooManyRequests):
+            backoff = (2**n) + random.random()
+            if backoff <= max_backoff_time:
+                time.sleep(backoff)
+                n += 1
+            else:
+                raise
     return dest.exists()
 
-def moveblob(src, dest, credentials=None, user_project=None):
+def moveblob(src, dest, credentials=None, user_project=None, max_backoff_time=5):
     """
     Move blob from src -> dest
     src and dest may either be a gs:// path or a premade blob object
@@ -1018,7 +1032,7 @@ def moveblob(src, dest, credentials=None, user_project=None):
         src = getblob(src, credentials, user_project)
     if isinstance(dest, str):
         dest = getblob(dest, credentials, user_project)
-    if copyblob(src, dest):
+    if copyblob(src, dest, max_backoff_time=max_backoff_time):
         src.delete()
         return True
     return False
