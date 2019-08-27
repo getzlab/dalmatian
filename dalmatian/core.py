@@ -635,7 +635,7 @@ def get_config(reference):
     2) reference = "namespace/name"
     3) reference = "name"
     """
-    namespace, name, version = decode_config(namespace, name, decode_only=True)
+    namespace, name, _ = decode_config(reference, decode_only=True)
     return _get_config_internal(namespace, name)
 
 def _get_config_version_internal(namespace, name):
