@@ -482,7 +482,7 @@ class WorkspaceManager(object):
                             )
                         else:
                             print("\nRetrying remaining", len(retries), "participants")
-                            participants = [item for item in retries]
+                            participant_ids = [item for item in retries]
                     else:
                         break
 
@@ -542,6 +542,15 @@ class WorkspaceManager(object):
         if sample_id is not None and isinstance(attrs, dict):
             attrs = pd.DataFrame(attrs, index=[sample_id])
         self.update_entity_attributes('sample', attrs)
+
+
+    def update_pair_attributes(self, attrs, pair_id=None):
+        """
+        Set or update attributes in attrs (pd.Series or pd.DataFrame)
+        """
+        if pair_id is not None and isinstance(attrs, dict):
+            attrs = pd.DataFrame(attrs, index=[pair_id])
+        self.update_entity_attributes('pair', attrs)
 
 
     def update_sample_set_attributes(self, sample_set_id, attrs):
