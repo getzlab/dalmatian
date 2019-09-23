@@ -23,7 +23,7 @@ gcloud auth application-default login
 Dalmatian provides the WorkspaceManager class for interacting with FireCloud workspaces.
 ```
 import dalmatian
-wm = dalmatian.WorkspaceManager(namespace, workspace)
+wm = dalmatian.WorkspaceManager("namespace/workspace")
 ```
 
 #### Creating and managing workspaces
@@ -78,9 +78,9 @@ wm2.create_workspace(wm)
 #### Running jobs
 Submit jobs:
 ```
-wm.create_submission(config_namespace, config_name, sample_id, 'sample', use_callcache=True)
-wm.create_submission(config_namespace, config_name, sample_set_id, 'sample_set', expression='this.samples', use_callcache=True)
-wm.create_submission(config_namespace, config_name, participant_id, 'participant', expression='this.samples_', use_callcache=True)
+wm.create_submission("config_namespace/config_name", sample_id, 'sample', use_callcache=True)
+wm.create_submission("config_namespace/config_name", sample_set_id, 'sample_set', expression='this.samples', use_callcache=True)
+wm.create_submission("config_namespace/config_name", participant_id, 'participant', expression='this.samples_', use_callcache=True)
 ```
 
 Monitor jobs:
