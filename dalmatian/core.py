@@ -866,12 +866,15 @@ def update_method(reference, synopsis, wdl_file, public=False, delete_old=True):
     """
     namespace, method, _ = decode_method(reference, decode_only=True)
     # check whether prior version exists
-    r = get_method(reference)
     old_version = None
-    if r:
-        old_version = np.max([m['snapshotId'] for m in r])
-        print('Method {}/{} exists. SnapshotID: {}'.format(
-            namespace, method, old_version))
+    try:
+        r = get_method(reference)
+        if r:
+            old_version = np.max([m['snapshotId'] for m in r])
+            print('Method {}/{} exists. SnapshotID: {}'.format(
+                namespace, method, old_version))
+    except MethodNotFound:
+        pass
 
     # push new version
     r = firecloud.api.update_repository_method(namespace, method, synopsis, wdl_file)
