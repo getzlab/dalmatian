@@ -88,16 +88,21 @@ def set_timeout(n):
 
 # Generate the fiss agent header
 
+__RAW_HEADER__ = firecloud.api._fiss_agent_header
+
 @wraps(firecloud.api._fiss_agent_header)
 def _firecloud_api_timeout_monkey_patcher(headers=None):
     """
     Monkey Patcher to apply allow external timeout control of Firecloud API
     """
+    global __RAW_HEADER__
     # 1) call the actual _fiss_agent_header to initialize the session
-    headers = _firecloud_api_timeout_monkey_patcher.__wrapped__(headers)
+    while hasattr(__RAW_HEADER__, '__wrapped__'):
+        __RAW_HEADER__ = __RAW_HEADER__.__wrapped__
+    headers = __RAW_HEADER__(headers)
     # 2) Get a reference to the underlying request method
     __CORE_SESSION_REQUEST__ = firecloud.api.__SESSION.request
-    if hasattr(__CORE_SESSION_REQUEST__, '__wrapped__'):
+    while hasattr(__CORE_SESSION_REQUEST__, '__wrapped__'):
         __CORE_SESSION_REQUEST__ = __CORE_SESSION_REQUEST__.__wrapped__
     # 3) Wrap the request method with our timeout wrapper
     @wraps(__CORE_SESSION_REQUEST__)
@@ -119,8 +124,7 @@ def _firecloud_api_timeout_monkey_patcher(headers=None):
 
     firecloud.api.__SESSION.request = _firecloud_api_timeout_wrapper
     # 4) Unwrap _fiss_agent_header. We don't need to monkey patch anymore
-    if hasattr(firecloud.api._fiss_agent_header, '__wrapped__'):
-        firecloud.api._fiss_agent_header = firecloud.api._fiss_agent_header.__wrapped__
+    firecloud.api._fiss_agent_header = __RAW_HEADER__
     return headers
 
 firecloud.api._fiss_agent_header = _firecloud_api_timeout_monkey_patcher
