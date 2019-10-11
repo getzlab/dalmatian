@@ -183,12 +183,15 @@ def gs_delete(file_list, chunk_size=500):
         subprocess.call(cmd, shell=True)
 
 
-def gs_copy(file_list, dest_dir, chunk_size=500):
+def gs_copy(file_list, dest_dir, chunk_size=500, user_project=None):
     """Copy list of files (paths starting with gs://)"""
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
-        cmd = 'echo -e "{}" | gsutil -m cp -I {}'.format('\n'.join(x), dest_dir)
+        if user_project is None:
+            cmd = 'echo -e "{}" | gsutil -m cp -I {}'.format('\n'.join(x), dest_dir)
+        else:
+            cmd = 'echo -e "{}" | gsutil -u {} -m cp -I {}'.format('\n'.join(x), user_project, dest_dir)
         subprocess.check_call(cmd, shell=True)
 
 
