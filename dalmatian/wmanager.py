@@ -636,12 +636,8 @@ class WorkspaceManager(object):
     def get_sample_attributes_in_set(self, set):
         """Get sample attributes of samples in a set"""
         samples = self.get_samples()
-        samples_in_set = self.get_sample_sets().loc[set]['samples']
-        all_samples = samples.index
-        idx = np.zeros(len(all_samples), dtype=bool)
-        for s in samples:
-            idx[all_samples == s] = True
-        return samples[idx]
+        samples_in_set = self.get_sample_sets().loc[set, 'samples']
+        return samples.loc[samples_in_set]
 
 
     def get_submission_status(self, config=None, filter_active=True, show_namespaces=False):
