@@ -714,14 +714,15 @@ def autofill_config_template(reference, workflow_inputs):
     # get dependent configurations
     wdl = get_wdl(reference)
     wdls = [i.split()[1].replace('"','') for i in wdl.split('\n') if i.startswith('import')]
-    assert [i.startswith('https://api.firecloud.org/ga4gh/v1/tools/') for i in wdls]
-    methods = [i.split(':')[-1].split('/')[0] for i in wdls]
+    base = 'https://api.firecloud.org/ga4gh/v1/tools/'
+    assert [i.startswith(base) for i in wdls]
+    methods = [i.replace(base,'').split('/')[0].replace(':','/') for i in wdls]
     # attempt to get configurations for all methods
     configs = {}
     for k,m in enumerate(methods, 1):
         print('\r  * importing configuration {}/{}'.format(k, len(methods)), end='')
         try:
-            configs[m] = get_config_json("{}/{}_cfg".format(method['namespace'], m))
+            configs[m] = get_config_json("{}_cfg".format(m))
         except:
             raise ValueError('No configuration found for {} ({} not found)'.format(m, m+'_cfg'))
     print()
