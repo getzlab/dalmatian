@@ -1255,7 +1255,7 @@ class WorkspaceManager(object):
         self.update_config(source.get_config(reference))
 
 
-    def publish_config(self, src_reference, dest_reference, public=False):
+    def publish_config(self, src_reference, dest_reference, public=False, delete_old=True):
         """
         Copy configuration to repository
         references may be either of the following
@@ -1289,7 +1289,7 @@ class WorkspaceManager(object):
                     r.json()['snapshotId'], [{'role': 'READER', 'user': 'public'}])
 
         # delete old version
-        if old_version is not None:
+        if old_version is not None and delete_old:
             r = firecloud.api.delete_repository_config(to_cnamespace, to_config, old_version)
             if r.status_code == 200:
                 print("Successfully deleted SnapshotID {}.".format(old_version))
