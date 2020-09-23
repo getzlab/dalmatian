@@ -2004,9 +2004,9 @@ class WorkspaceManager(object):
 
         if isinstance(attrs, pd.DataFrame):
             attr_list = []
-            for i,row in attrs.iterrows():
+            for entity, row in attrs.iterrows():
                 attr_list.extend([{
-                    'name':row.name,
+                    'name':entity,
                     'entityType':etype,
                     'operations': [
                         {
