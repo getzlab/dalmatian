@@ -270,20 +270,24 @@ def gs_size(file_list_s):
 
 
 def _parse_stat_entry(se):
-    """parse output from 'gsutil stat'"""
-    se = se.split('\n')
-    filename = se[0].strip(':')
-    md5 = [i for i in se if 'md5' in i][0].split()[-1]
-    md5 = binascii.hexlify(base64.b64decode(md5)).decode()
-    sample_id = os.path.basename(filename).split('.')[0]
-    return sample_id, md5
+    """convert output from 'gsutil stat' to pd.Series"""
+    se = se.strip().split('\n')
+    filepath = se[0].strip(':')
+    se = [i.split(':',1) for i in se[1:]]
+    se = {i[0].strip():i[1].strip() for i in se}
+    se['filepath'] = filepath
+    se['md5'] = binascii.hexlify(base64.b64decode(se['Hash (md5)'])).decode()
+    sample_id = os.path.basename(filepath).split('.')[0]
+    return pd.Series(se, name=sample_id)
 
 
-def get_md5_hashes(wildcard_path):
-    s = subprocess.check_output('gsutil stat '+wildcard_path, shell=True).decode().strip()
+def gs_stat(wildcard_path):
+    """Wrapper for gsutil stat; returns output in a dataframe"""
+    s = subprocess.check_output(f'gsutil stat {wildcard_path}', shell=True).decode().strip()
     s = ['gs://'+i for i in s.split('gs://')[1:]]
-    sample_ids, md5 = np.array([_parse_stat_entry(i) for i in s]).T
-    return pd.Series(md5, index=sample_ids, name='md5').sort_index()
+    df = pd.concat([_parse_stat_entry(se) for se in s], axis=1).T
+    df.index.name = 'sample_id'
+    return df
 
 
 def get_md5hash(file_path):
