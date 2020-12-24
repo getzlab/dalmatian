@@ -276,7 +276,8 @@ def _parse_stat_entry(se):
     se = [i.split(':',1) for i in se[1:]]
     se = {i[0].strip():i[1].strip() for i in se}
     se['filepath'] = filepath
-    se['md5'] = binascii.hexlify(base64.b64decode(se['Hash (md5)'])).decode()
+    if 'Hash (md5)' in se:
+        se['md5'] = binascii.hexlify(base64.b64decode(se['Hash (md5)'])).decode()
     return pd.Series(se, name=os.path.basename(filepath))
 
 
