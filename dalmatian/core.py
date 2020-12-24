@@ -277,8 +277,7 @@ def _parse_stat_entry(se):
     se = {i[0].strip():i[1].strip() for i in se}
     se['filepath'] = filepath
     se['md5'] = binascii.hexlify(base64.b64decode(se['Hash (md5)'])).decode()
-    sample_id = os.path.basename(filepath).split('.')[0]
-    return pd.Series(se, name=sample_id)
+    return pd.Series(se, name=os.path.basename(filepath))
 
 
 def gs_stat(wildcard_path):
@@ -286,7 +285,7 @@ def gs_stat(wildcard_path):
     s = subprocess.check_output(f'gsutil stat {wildcard_path}', shell=True).decode().strip()
     s = ['gs://'+i for i in s.split('gs://')[1:]]
     df = pd.concat([_parse_stat_entry(se) for se in s], axis=1).T
-    df.index.name = 'sample_id'
+    df.index.name = 'filename'
     return df
 
 
