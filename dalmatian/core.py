@@ -281,9 +281,13 @@ def _parse_stat_entry(se):
     return pd.Series(se, name=os.path.basename(filepath))
 
 
-def gs_stat(wildcard_path):
+def gs_stat(wildcard_path, user_project=None):
     """Wrapper for gsutil stat; returns output in a dataframe"""
-    s = subprocess.check_output(f'gsutil stat {wildcard_path}', shell=True).decode().strip()
+    cmd = 'gsutil'
+    if user_project is not None:
+        cmd += f' -u {user_project}'
+    cmd += f' stat {wildcard_path}'
+    s = subprocess.check_output(cmd, shell=True).decode().strip()
     s = ['gs://'+i for i in s.split('gs://')[1:]]
     df = pd.concat([_parse_stat_entry(se) for se in s], axis=1).T
     df.index.name = 'filename'
