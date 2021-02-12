@@ -192,7 +192,7 @@ def gs_copy(file_list, dest_dir, chunk_size=500, user_project=None):
             cmd = 'echo -e "{}" | gsutil -m cp -I {}'.format('\n'.join(x), dest_dir)
         else:
             cmd = 'echo -e "{}" | gsutil -u {} -m cp -I {}'.format('\n'.join(x), user_project, dest_dir)
-        subprocess.check_call(cmd, shell=True)
+        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
 
 
 def gs_move(file_list, dest_dir, chunk_size=500):
