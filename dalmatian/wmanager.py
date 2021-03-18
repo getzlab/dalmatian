@@ -500,10 +500,11 @@ class WorkspaceManager(object):
         self.update_participant_entities('pair')
 
 
-    def make_pairs(self, sample_set_id=None):
+    def make_pairs(self, sample_set_id=None, dry_run=False):
         """
         Make all possible pairs from participants (all or a specified set)
         Requires sample_type sample level annotation 'Normal' or 'Tumor'
+        If dry_run == True, simply return the dataframe of pairs that would be uploaded.
         """
         # get data from sample set or all samples
         if sample_set_id is None:
@@ -534,7 +535,11 @@ class WorkspaceManager(object):
             index=pair_ids
         )
         pair_df.index.name = 'entity:pair_id'
-        self.upload_entities('pair', pair_df)
+
+        if not dry_run:
+            self.upload_entities('pair', pair_df)
+        else:
+            return pair_df
 
 
     def update_sample_attributes(self, attrs, sample_id=None):
