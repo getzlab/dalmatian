@@ -233,7 +233,7 @@ class WorkspaceManager(object):
         Checks a given entity dataframe for local files which need to be uploaded
         Returns a new df with new gs:// paths for the uploaded files
         """
-        base_path = "gs://{}/{}s".format(self.get_bucket_id(), etype)
+        base_path = f"gs://{self.get_bucket_id()}/{etype}s"
         uploads = []
 
         def scan_row(row):
@@ -243,11 +243,7 @@ class WorkspaceManager(object):
             # and will not represent valid filepaths anymore
             for i, value in enumerate(row):
                 if isinstance(value, str) and os.path.isfile(value):
-                    path = "{}/{}/{}".format(
-                        base_path,
-                        row.name,
-                        os.path.basename(value)
-                    )
+                    path = f"{base_path}/{row.name}/{os.path.basename(value)}"
                     uploads.append(upload_to_blob(value, path))
                     self.hound.write_log_entry(
                         'upload',
@@ -255,10 +251,7 @@ class WorkspaceManager(object):
                             os.path.basename(value),
                             byteSize(os.path.getsize(value))
                         ),
-                        entities=['{}/{}'.format(
-                            etype,
-                            row.name
-                        )]
+                        entities=[f'{etype}/{row.name}']
                     )
                     row.iloc[i] = path
             return row
@@ -269,7 +262,7 @@ class WorkspaceManager(object):
 
         if len(uploads):
             # Wait for callbacks
-            [callback() for callback in status_bar.iter(uploads, prepend="Uploading {}s ".format(etype))]
+            [callback() for callback in status_bar.iter(uploads, prepend=f"Uploading {etype}s ")]
 
         # Now upload as normal
         return staged_df
@@ -280,32 +273,36 @@ class WorkspaceManager(object):
         index: True if DataFrame index corresponds to ID
         Uploads local files present in the DF
         """
+        # upload dataframe contents
         buf = io.StringIO()
         self.upload_entity_data(etype, df).to_csv(buf, sep='\t', index=index)
         s = firecloud.api.upload_entities(self.namespace, self.workspace, buf.getvalue())
         buf.close()
+
         et = etype.replace('_set', ' set')
         idx = None
         index_column = None
         if index:
             idx = df.index
-        elif 'entity:{}_id'.format(etype) in df.columns:
-            idx = df['entity:{}_id'.format(etype)]
-            index_column = 'entity:{}_id'.format(etype)
+        elif f'entity:{etype}_id' in df.columns:
+            idx = df[f'entity:{etype}_id']
+            index_column = f'entity:{etype}_id'
         elif etype+'_id' in df.columns:
             idx = df[etype+'_id']
             index_column = etype+'_id'
+
         if s.status_code == 200:
             if 'set' in etype:
                 if index:
                     sets = df.index
                 else:
                     sets = df[df.columns[0]]
-                print('Successfully imported {} {}s:'.format(len(np.unique(sets)), et))
+                print(f'Successfully imported {len(np.unique(sets))} {et}s:')
                 for s in np.unique(sets):
-                    print('  * {} ({} {}s)'.format(s, np.sum(sets==s), et.replace(' set','')))
+                    print(f"  * {s} ({np.sum(sets==s)} {et.replace(' set','')}s)")
             else:
-                print('Successfully imported {} {}s.'.format(df.shape[0], et))
+                print(f'Successfully imported {df.shape[0]} {et}s.')
+
             if self.hound._enabled:
                 if df.index.name is not None:
                     if df.index.name.startswith('membership:'):
@@ -343,7 +340,7 @@ class WorkspaceManager(object):
                                             val
                                         )
         else:
-            raise APIException('{} import failed.'.format(et.capitalize()), s)
+            raise APIException(f'{et.capitalize()} import failed.', s)
 
 
     def upload_participants(self, participant_ids):

@@ -288,21 +288,24 @@ def gs_stat(wildcard_path, user_project=None):
         cmd += f' -u {user_project}'
     cmd += f' stat {wildcard_path}'
     s = subprocess.check_output(cmd, shell=True).decode().strip()
-    s = ['gs://'+i for i in s.split('gs://')[1:]]
+    s = [f'gs://{i}' for i in s.split('gs://')[1:]]
     df = pd.concat([_parse_stat_entry(se) for se in s], axis=1).T
     df.index.name = 'filename'
     return df
 
 
-def get_md5hash(file_path):
+def get_md5hash(file_path, user_project=None):
     """Calculate MD5 hash using gsutil or md5sum, depending on location"""
     if file_path.startswith('gs://'):
-        s = subprocess.check_output('gsutil hash -m -h '+file_path, shell=True).decode()
-        s = s.strip().split('\n')
+        cmd = 'gsutil'
+        if user_project is not None:
+            cmd += f' -u {user_project}'
+        cmd += f' hash -m -h {file_path}'
+        s = subprocess.check_output(cmd, shell=True).decode().strip().split('\n')
         s = [i for i in s if 'md5' in i][0]
         return s.split()[-1]
     else:
-        return subprocess.check_output('md5sum '+file_path, shell=True).decode().split()[0]
+        return subprocess.check_output(f'md5sum {file_path}', shell=True).decode().split()[0]
 
 
 def get_md5hashes(file_list_s, num_threads=10):
@@ -310,7 +313,7 @@ def get_md5hashes(file_list_s, num_threads=10):
     md5_hashes = []
     with mp.Pool(processes=num_threads) as pool:
         for k,r in enumerate(pool.imap(get_md5hash, [i for i in file_list_s]), 1):
-            print('\rCalculating MD5 hash for file {}/{}'.format(k,len(file_list_s)), end='')
+            print(f'\rCalculating MD5 hash for file {k}/{len(file_list_s)}', end='')
             md5_hashes.append(r)
     return md5_hashes
 
