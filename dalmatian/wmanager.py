@@ -1371,11 +1371,13 @@ class WorkspaceManager(object):
         return df
 
 
-    def get_samples(self):
+    def get_samples(self, sort_columns=True):
         """Get DataFrame with samples and their attributes"""
         df = self.get_entities('sample')
         if 'participant' in df:
             df['participant'] = df['participant'].apply(lambda x: x['entityName'] if isinstance(x, dict) else x)
+        if sort_columns:
+            df = df[sorted(df.columns)]
         return df
 
 

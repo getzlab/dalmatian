@@ -180,7 +180,7 @@ def gs_delete(file_list, chunk_size=500):
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         cmd = 'echo -e "{}" | gsutil -m rm -I'.format('\n'.join(x))
-        subprocess.call(cmd, shell=True)
+        subprocess.call(cmd, shell=True, executable='/bin/bash')
 
 
 def gs_copy(file_list, dest_dir, chunk_size=500, user_project=None):
@@ -844,8 +844,8 @@ def compare_wdl(reference, wdl_path):
     with open(wdl_path) as f:
         wdl2 = f.read()
     print('Comparing:')
-    print('< {}'.format(wdl_path))
-    print('> {}/{}/{}'.format(namespace, name, version))
+    print(f'< {wdl_path}')
+    print(f'> {namespace}/{name}/{version}')
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
     d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, executable='/bin/bash')
     print(d.stdout.decode())
