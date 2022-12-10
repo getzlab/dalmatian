@@ -3,7 +3,7 @@ from __future__ import print_function
 import os, sys, json
 import subprocess
 from datetime import datetime
-from collections import Iterable
+from collections.abc import Iterable
 from threading import local
 from contextlib import contextmanager
 import pandas as pd
