@@ -291,6 +291,8 @@ def gs_stat(wildcard_path, user_project=None):
     s = [f'gs://{i}' for i in s.split('gs://')[1:]]
     df = pd.concat([_parse_stat_entry(se) for se in s], axis=1).T
     df.index.name = 'filename'
+    for c in ['Creation time', 'Update time']:
+        df[c] = df[c].apply(lambda x: datetime.strptime(x, '%a, %d %b %Y %H:%M:%S GMT'))
     return df
 
 
