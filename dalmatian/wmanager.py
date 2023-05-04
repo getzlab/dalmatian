@@ -2017,7 +2017,7 @@ class WorkspaceManager(object):
                             "op": "AddUpdateAttribute",
                             "attributeName": i,
                             "addUpdateAttribute": self._process_attribute_value(i, j, reserved_attrs)
-                        } for i,j in row.iteritems() if not np.any(pd.isnull(j))
+                        } for i,j in row.items() if not np.any(pd.isnull(j))
                     ]
                 }])
         elif isinstance(attrs, pd.Series):
@@ -2031,7 +2031,7 @@ class WorkspaceManager(object):
                         "addUpdateAttribute": self._process_attribute_value(i, j, reserved_attrs)
                     }
                 ]
-            } for i,j in attrs.iteritems() if not np.any(pd.isnull(j))]
+            } for i,j in attrs.items() if not np.any(pd.isnull(j))]
         else:
             raise ValueError('Unsupported input format.')
 
