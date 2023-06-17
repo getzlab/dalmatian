@@ -28,16 +28,16 @@ class APIException(ValueError):
     Class for generic FireCloud errors
     """
     def __init__(self, *args, **kwargs):
-        if len(args)==2 and isinstance(args[0], str) and isinstance(args[1], requests.Response):
+        if len(args) == 2 and isinstance(args[0], str) and isinstance(args[1], requests.Response):
             self.response = args[1]
             return super().__init__(
-                "{}: ({}) : {}".format(args[0], args[1].status_code, args[1].text),
+                f"{args[0]}: ({args[1].status_code}) : {args[1].text}",
                 **kwargs
             )
-        elif len(args)==1 and isinstance(args[0], requests.Response):
+        elif len(args) == 1 and isinstance(args[0], requests.Response):
             self.response = args[0]
             return super().__init__(
-                "({}) : {}".format(args[0].status_code, args[0].text),
+                f"({args[0].status_code}) : {args[0].text}",
                 **kwargs
             )
         self.response = None
@@ -164,9 +164,9 @@ def workflow_time(workflow):
 def gs_list_bucket_files(bucket_id, path=None, ext=None):
     """Get list of all files stored in bucket"""
     if path is None:
-        s = subprocess.check_output('gsutil ls gs://{}/**'.format(bucket_id), shell=True)
+        s = subprocess.check_output(f'gsutil ls gs://{bucket_id}/**', shell=True)
     else:
-        s = subprocess.check_output(os.path.join('gsutil ls gs://{}'.format(bucket_id), path, '**'), shell=True)
+        s = subprocess.check_output(f'gsutil ls gs://{bucket_id}/{path}/**', shell=True)
     s = s.decode().strip().split('\n')
     if ext is not None:
         s = [i for i in s if i.endswith(ext)]
@@ -201,7 +201,7 @@ def gs_move(file_list, dest_dir, chunk_size=500):
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         cmd = 'echo -e "{}" | gsutil -m mv -I {}'.format('\n'.join(x), dest_dir)
-        subprocess.check_call(cmd, shell=True)
+        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
 
 
 def _gsutil_cp_wrapper(args):
@@ -211,11 +211,11 @@ def _gsutil_cp_wrapper(args):
     filename = os.path.basename(dest_path)
     print('Starting copy: '+filename, flush=True)
     st = datetime.now()
-    subprocess.check_call('gsutil cp {} {}'.format(source_path, dest_path), shell=True)
+    subprocess.check_call(f'gsutil cp {source_path} {dest_path}', shell=True)
     et = datetime.now()
     time_min = (et-st).total_seconds()/60
     size_gb = os.path.getsize(source_path)/1024**3
-    print('Finished copy: {}. size: {:.2f} GB, time elapsed: {:.2f} min.'.format(filename, size_gb, time_min), flush=True)
+    print(f'Finished copy: {filename}. size: {size_gb:.2f} GB, time elapsed: {time_min:.2f} min.', flush=True)
     # return time_min, size_gb
 
 
@@ -224,7 +224,7 @@ def gs_copy_par(source_paths, dest_paths, num_threads=10):
     if len(source_paths) != len(dest_paths):
         raise ValueError("list of source and destination paths must be of equal length")
     res_list = []
-    print('Starting cp pool ({} threads)'.format(num_threads), flush=True)
+    print(f'Starting cp pool ({num_threads} threads)', flush=True)
     with mp.Pool(processes=int(num_threads)) as pool:
         for i in range(len(source_paths)):
             res = pool.map_async(_gsutil_cp_wrapper, ((source_paths[i], dest_paths[i], ),))
@@ -244,13 +244,13 @@ def gs_exists(file_list_s):
     """
     status_s = pd.Series(False, index=file_list_s.index, name='file_exists')
     for k,(i,p) in enumerate(zip(file_list_s.index, file_list_s), 1):
-        print('\rChecking {}/{} files'.format(k, len(file_list_s)), end='')
+        print(f'\rChecking {k}/{len(file_list_s)} files', end='')
         try:
-            s = subprocess.check_output('gsutil -q stat {}'.format(p), shell=True)
+            s = subprocess.check_output(f'gsutil -q stat {p}', shell=True)
             status_s[i] = True
         except subprocess.CalledProcessError as e:
             s = e.stdout.decode()
-            print('{}: {}'.format(i, s))
+            print(f'{i}: {s}')
     return status_s
 
 
@@ -261,7 +261,7 @@ def gs_size(file_list_s):
     file_list_s: pd.Series
     """
     prefix = os.path.commonprefix(file_list_s.tolist())
-    s = subprocess.check_output('gsutil ls -l {}**'.format(prefix), shell=True)
+    s = subprocess.check_output(f'gsutil ls -l {prefix}**', shell=True)
     gs_sizes = s.decode().strip().split('\n')[:-1]
     gs_sizes = pd.Series([np.int64(i.split()[0]) for i in gs_sizes],
         index=[i.split()[-1] for i in gs_sizes])
@@ -328,13 +328,13 @@ def get_google_metadata(job_id):
     jobid: operations ID
     """
     if isinstance(job_id, str):
-        s = subprocess.check_output('gcloud alpha genomics operations describe '+job_id+' --format json', shell=True)
+        s = subprocess.check_output(f'gcloud alpha genomics operations describe {job_id} --format json', shell=True)
         return json.loads(s.decode())
     elif isinstance(job_id, Iterable):
         json_list = []
         for k,j in enumerate(job_id, 1):
-            print('\rFetching metadata ({}/{})'.format(k,len(job_id)), end='')
-            s = subprocess.check_output('gcloud alpha genomics operations describe '+j+' --format json', shell=True)
+            print(f'\rFetching metadata ({k}/{len(job_id)})', end='')
+            s = subprocess.check_output(f'gcloud alpha genomics operations describe {j} --format json', shell=True)
             json_list.append(json.loads(s.decode()))
         return json_list
 
@@ -378,7 +378,7 @@ def calculate_google_cost(jobid, jobid_lookup_df):
 def list_workspaces():
     """List all workspaces"""
     r = firecloud.api.list_workspaces()
-    if r.status_code==200:
+    if r.status_code == 200:
         return r.json()
     else:
         print(r.text)
@@ -418,9 +418,9 @@ def list_methods(namespace=None, name=None):
     r = r.json()
 
     if namespace is not None:
-        r = [m for m in r if m['namespace']==namespace]
+        r = [m for m in r if m['namespace'] == namespace]
     if name is not None:
-        r = [m for m in r if m['name']==name]
+        r = [m for m in r if m['name'] == name]
 
     df = pd.DataFrame(r)
     if len(df):
@@ -437,9 +437,9 @@ def _get_method_internal(namespace, name):
     if r.status_code != 200:
         raise APIException(r)
     r = r.json()
-    r = [m for m in r if m['name']==name and m['namespace']==namespace]
+    r = [m for m in r if m['name'] == name and m['namespace'] == namespace]
     if len(r) == 0:
-        raise MethodNotFound("No such method {}/{}".format(namespace, name))
+        raise MethodNotFound(f"No such method {namespace}/{name}")
     return r
 
 
@@ -465,7 +465,7 @@ def get_method_metadata(reference):
     namespace, name, version = decode_method(reference)
     r = firecloud.api.get_repository_method(namespace, name, version)
     if r.status_code == 404:
-        raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
+        raise MethodNotFound(f"No such method {namespace}/{name}/{version}")
     elif r.status_code != 200:
         raise APIException("Unable to fetch method metadata", r)
     return r.json()
@@ -478,7 +478,7 @@ def _get_method_version_internal(namespace, name):
     """
     r = _get_method_internal(namespace, name)
     if len(r) == 0:
-        raise MethodNotFound("No such method {}/{}".format(namespace, name))
+        raise MethodNotFound(f"No such method {namespace}/{name}")
     return int(np.max([m['snapshotId'] for m in r]))
 
 
@@ -505,17 +505,15 @@ def get_dockstore_method(reference):
     repo, name = reference[14:].split('/')[:2]
     path = os.path.join('dockstore.org', repo, name)
     response = requests.get(
-        "https://dockstore.org/api/workflows/path/entry/{}/published".format(
-            urllib.parse.quote_plus(path)
-        )
+        f"https://dockstore.org/api/workflows/path/entry/{urllib.parse.quote_plus(path)}/published"
     )
     if response.status_code == 400 and 'Entry not found' in response.text:
-        raise MethodNotFound("No such method on dockstore {}".format(path))
+        raise MethodNotFound(f"No such method on dockstore {path}")
     elif response.status_code != 200:
         raise APIException("Dockstore API returned unexpected status", response)
     dockstore_method = response.json()
     if dockstore_method['descriptorType'] != 'wdl':
-        raise TypeError("dockstore method {} is not a WDL-based workflow".format(path))
+        raise TypeError(f"dockstore method {path} is not a WDL-based workflow")
     return [
         {
             **version,
@@ -526,10 +524,7 @@ def get_dockstore_method(reference):
                 'sourceRepo': 'dockstore',
                 'methodVersion': version['name'],
                 'methodPath': path,
-                'methodUri': 'dockstore://{}/{}'.format(
-                    urllib.parse.quote_plus(path),
-                    version['name']
-                )
+                'methodUri': f"dockstore://{urllib.parse.quote_plus(path)}/{version['name']}"
             }
         }
         for version in sorted(
@@ -554,11 +549,7 @@ def get_dockstore_method_version(reference):
     for entry in versions:
         if entry['name'] == version:
             return entry
-    raise MethodNotFound("Version {} not available for method dockstore.org/{}/{}".format(
-        version,
-        repo,
-        workflow
-    ))
+    raise MethodNotFound(f"Version {version} not available for method dockstore.org/{repo}/{workflow}")
 
 
 def get_dockstore_config_template(reference):
@@ -594,11 +585,11 @@ def decode_config(reference, decode_only=False):
         try:
             configs = configs.loc[configs.groupby('namespace').idxmax('snapshotId').snapshotId]
         except AttributeError as e:
-            raise ConfigNotFound("No config by name '{}'".format(reference)) from e
+            raise ConfigNotFound(f"No config by name '{reference}'") from e
         if len(configs) > 1:
-            raise ConfigNotUnique("Found more than one config with name '{}'. Must provide a namespace".format(reference))
+            raise ConfigNotUnique(f"Found more than one config with name '{reference}'. Must provide a namespace")
         if len(configs) == 0:
-            raise ConfigNotFound("No config by name '{}'".format(reference))
+            raise ConfigNotFound(f"No config by name '{reference}'")
         configs = configs.iloc[0]
         # Even though a version was not provided by the user
         # we found the latest snapshot as a byproduct of the search
@@ -623,9 +614,9 @@ def list_configs(namespace=None, name=None):
     r = r.json()
 
     if namespace is not None:
-        r = [m for m in r if m['namespace']==namespace]
+        r = [m for m in r if m['namespace'] == namespace]
     if name is not None:
-        r = [m for m in r if m['name']==name]
+        r = [m for m in r if m['name'] == name]
 
     df = pd.DataFrame(r)
     if len(df):
@@ -644,7 +635,7 @@ def _get_config_internal(namespace, name):
     r = r.json()
     if len(r) == 0:
         raise ConfigNotFound("No visible configurations")
-    r = [m for m in r if m['name']==name and m['namespace']==namespace]
+    r = [m for m in r if m['name'] == name and m['namespace'] == namespace]
     return r
 
 def get_config(reference):
@@ -665,7 +656,7 @@ def _get_config_version_internal(namespace, name):
     """
     r = _get_config_internal(namespace, name)
     if len(r) == 0:
-        raise ConfigNotFound("No such config {}/{}".format(namespace, name))
+        raise ConfigNotFound(f"No such config {namespace}/{name}")
     return int(np.max([m['snapshotId'] for m in r]))
 
 def get_config_version(reference):
@@ -689,7 +680,7 @@ def get_config_json(reference):
     namespace, name, version = decode_config(reference)
     r = firecloud.api.get_repository_config(namespace, name, version)
     if r.status_code == 404:
-        raise ConfigNotFound("No such config {}/{}/{}".format(namespace, name, version))
+        raise ConfigNotFound(f"No such config {namespace}/{name}/{version}")
     elif r.status_code != 200:
         raise APIException("Unable to fetch config", r)
     return json.loads(r.json()['payload'])
@@ -709,7 +700,7 @@ def get_config_template(reference):
         version
     )
     if r.status_code == 404:
-        raise MethodNotFound("No such method {}/{}/{}".format(namespace, name, version))
+        raise MethodNotFound(f"No such method {namespace}/{name}/{version}")
     elif r.status_code != 200:
         raise APIException("Unable to fetch config template", r)
     return r.json()
@@ -733,11 +724,11 @@ def autofill_config_template(reference, workflow_inputs):
     # attempt to get configurations for all methods
     configs = {}
     for k,m in enumerate(methods, 1):
-        print('\r  * importing configuration {}/{}'.format(k, len(methods)), end='')
+        print(f'\r  * importing configuration {k}/{len(methods)}', end='')
         try:
-            configs[m] = get_config_json("{}_cfg".format(m))
+            configs[m] = get_config_json(f"{m}_cfg")
         except:
-            raise ValueError('No configuration found for {} ({} not found)'.format(m, m+'_cfg'))
+            raise ValueError(f'No configuration found for {m} ({m}_cfg not found)')
     print()
 
     # parse out inputs/outputs
@@ -764,7 +755,7 @@ def autofill_config_template(reference, workflow_inputs):
 
     # add workflow inputs
     workflow_name = np.unique([i.split('.')[0] for i in attr['inputs']])
-    assert len(workflow_name)==1
+    assert len(workflow_name) == 1
     workflow_name = workflow_name[0]
     for i in workflow_inputs:
         j = workflow_name+'.'+i
@@ -780,20 +771,20 @@ def print_methods(namespace):
     if r.status_code != 200:
         raise APIException(r)
     r = r.json()
-    r = [m for m in r if m['namespace']==namespace]
+    r = [m for m in r if m['namespace'] == namespace]
     methods = np.unique([m['name'] for m in r])
     for k in methods:
-        print('{}: {}'.format(k, np.max([m['snapshotId'] for m in r if m['name']==k])))
+        print('{}: {}'.format(k, np.max([m['snapshotId'] for m in r if m['name'] == k])))
 
 
 def print_configs(namespace):
     """Print all configurations in a namespace"""
     configs = list_configs(namespace=namespace)
     if len(configs) == 0:
-        raise ConfigNotFound("No visible configurations in namespace {}".format(namespace))
+        raise ConfigNotFound(f"No visible configurations in namespace {namespace}")
     configs = np.unique([m['name'] for m in r])
     for k in configs:
-        print('{}: {}'.format(k, np.max([m['snapshotId'] for m in r if m['name']==k])))
+        print('{}: {}'.format(k, np.max([m['snapshotId'] for m in r if m['name'] == k])))
 
 
 def get_wdl(reference):
@@ -826,8 +817,8 @@ def compare_wdls(reference1, reference2):
     wdl1 = get_wdl(reference1)
     wdl2 = get_wdl(reference2)
     print('Comparing:')
-    print('< {}/{}/{}'.format(namespace1, name1, version1))
-    print('> {}/{}/{}'.format(namespace2, name2, version2))
+    print(f'< {namespace1}/{name1}/{version1}')
+    print(f'> {namespace2}/{name2}/{version2}')
     cmd = 'diff <(echo \''+wdl1+'\') <(echo \''+wdl2+'\')'
     d = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, executable='/bin/bash')
     print(d.stdout.decode())
@@ -866,7 +857,7 @@ def redact_method(reference, mode='outdated'):
     if mode not in {'outdated', 'latest', 'all'}:
         raise ValueError("Mode must be in {'outdated', 'latest', 'all'}")
     namespace, name, version = decode_method(reference, decode_only=True)
-    methods = [m for m in list_methods() if m['name']==name and m['namespace']==namespace]
+    methods = [m for m in list_methods() if m['name'] == name and m['namespace'] == namespace]
     versions = np.sort([m['snapshotId'] for m in r])
     print('Versions: {}'.format(', '.join(map(str, versions))))
     if mode == 'outdated':
@@ -874,7 +865,7 @@ def redact_method(reference, mode='outdated'):
     elif mode == 'latest':
         versions = versions[-1:]
     for i in versions:
-        print('  * deleting version {}'.format(i))
+        print(f'  * deleting version {i}')
         r = firecloud.api.delete_repository_method(method_namespace, method_name, i)
         if r.status_code != 200:
             raise APIException(r)
@@ -892,15 +883,14 @@ def update_method(reference, synopsis, wdl_file, public=False, delete_old=True):
         r = get_method(reference)
         if r:
             old_version = np.max([m['snapshotId'] for m in r])
-            print('Method {}/{} exists. SnapshotID: {}'.format(
-                namespace, method, old_version))
+            print(f'Method {namespace}/{method} exists. SnapshotID: {old_version}')
     except MethodNotFound:
         pass
 
     # push new version
     r = firecloud.api.update_repository_method(namespace, method, synopsis, wdl_file)
-    if r.status_code==201:
-        print("Successfully pushed {}/{}. New SnapshotID: {}".format(namespace, method, r.json()['snapshotId']))
+    if r.status_code == 201:
+        print(f"Successfully pushed {namespace}/{method}. New SnapshotID: {r.json()['snapshotId']}")
     else:
         raise APIException('Update failed', r)
 
@@ -913,7 +903,7 @@ def update_method(reference, synopsis, wdl_file, public=False, delete_old=True):
         r = firecloud.api.delete_repository_method(namespace, method, old_version)
         if r.status_code != 200:
             raise APIException("Delete failed", r)
-        print("Successfully deleted SnapshotID {}.".format(old_version))
+        print(f"Successfully deleted SnapshotID {old_version}.")
 
 
 
