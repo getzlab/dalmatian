@@ -1345,7 +1345,7 @@ class WorkspaceManager(object):
         df = pd.DataFrame({i['name']:i['attributes'] for i in all_entities}).T
         df.index.name = etype+'_id'
         # convert JSON to lists; assumes that values are stored in 'items'
-        df = df.applymap(lambda x: x['items'] if isinstance(x, dict) and 'items' in x else x)
+        df = df.map(lambda x: x['items'] if isinstance(x, dict) and 'items' in x else x)
         return df
 
 
@@ -1375,8 +1375,8 @@ class WorkspaceManager(object):
         """Get DataFrame with participants and their attributes"""
         df = self.get_entities('participant')
         # convert sample lists from JSON
-        df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
-                            if isinstance(x, list) and np.all(pd.notnull(x)) else x)
+        df = df.map(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
+                        if isinstance(x, list) and np.all(pd.notnull(x)) else x)
         return df
 
 
@@ -1384,8 +1384,8 @@ class WorkspaceManager(object):
         """Get DataFrame with sample sets and their attributes"""
         df = self.get_entities('sample_set')
         # convert sample lists from JSON
-        df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
-                            if isinstance(x, list) and np.all(pd.notnull(x)) else x)
+        df = df.map(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
+                        if isinstance(x, list) and np.all(pd.notnull(x)) else x)
         return df
 
 
@@ -1393,8 +1393,8 @@ class WorkspaceManager(object):
         """Get DataFrame with sample sets and their attributes"""
         df = self.get_entities('participant_set')
         # convert sample lists from JSON
-        df = df.applymap(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
-                            if isinstance(x, list) and np.all(pd.notnull(x)) else x)
+        df = df.map(lambda x: [i['entityName'] if 'entityName' in i else i for i in x]
+                        if isinstance(x, list) and np.all(pd.notnull(x)) else x)
         return df
 
 
