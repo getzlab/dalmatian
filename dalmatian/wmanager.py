@@ -225,7 +225,7 @@ class WorkspaceManager(object):
         return r.json()
 
 
-    def upload_entity_data(self, etype, df):
+    def upload_entity_data(self, etype, df, allow_composite=True):
         """
         Checks a given entity dataframe for local files which need to be uploaded
         Returns a new df with new gs:// paths for the uploaded files
@@ -241,7 +241,7 @@ class WorkspaceManager(object):
             for i, value in enumerate(row):
                 if isinstance(value, str) and os.path.isfile(value):
                     path = f"{base_path}/{row.name}/{os.path.basename(value)}"
-                    uploads.append(upload_to_blob(value, path))
+                    uploads.append(upload_to_blob(value, path, allow_composite=allow_composite))
                     self.hound.write_log_entry(
                         'upload',
                         "Uploading new file to workspace: {} ({})".format(
@@ -654,7 +654,7 @@ class WorkspaceManager(object):
             df.append(d)
         df = pd.DataFrame(df)
         df.set_index('entity_id', inplace=True)
-        df['date'] = pd.to_datetime(df['date'])
+        df['date'] = pd.to_datetime(df['date'], format="%H:%M:%S %m/%d/%Y")
         df = df[['configuration', 'status']+statuses+['date', 'submission_id']]
         if filter_active:
             df = df[(df['Running'] != 0) | (df['Submitted'] != 0)]
