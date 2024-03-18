@@ -195,31 +195,29 @@ def gs_copy(file_list, dest_dir, chunk_size=500, user_project=None):
         subprocess.check_call(cmd, shell=True, executable='/bin/bash')
 
 
-def gs_move(file_list, dest_dir, chunk_size=500):
+def gs_move(file_list, dest_dir, chunk_size=500, user_project=None):
     """Move list of files (paths starting with gs://)"""
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
-        cmd = 'echo -e "{}" | gsutil -m mv -I {}'.format('\n'.join(x), dest_dir)
+        if user_project is None:
+            cmd = 'echo -e "{}" | gsutil -m mv -I {}'.format('\n'.join(x), dest_dir)
+        else:
+            cmd = 'echo -e "{}" | gsutil -u {} -m mv -I {}'.format('\n'.join(x), user_project, dest_dir)
         subprocess.check_call(cmd, shell=True, executable='/bin/bash')
 
 
 def _gsutil_cp_wrapper(args):
-    """gsutil cp wrapper for gs_par_upload"""
-    source_path = args[0]
-    dest_path = args[1]
+    """gsutil cp wrapper for gs_copy_par"""
+    source_path, dest_path, user_project = args
     filename = os.path.basename(dest_path)
-    print('Starting copy: '+filename, flush=True)
-    st = datetime.now()
-    subprocess.check_call(f'gsutil cp {source_path} {dest_path}', shell=True)
-    et = datetime.now()
-    time_min = (et-st).total_seconds()/60
-    size_gb = os.path.getsize(source_path)/1024**3
-    print(f'Finished copy: {filename}. size: {size_gb:.2f} GB, time elapsed: {time_min:.2f} min.', flush=True)
-    # return time_min, size_gb
+    if user_project is None:
+        subprocess.check_call(f'gsutil cp {source_path} {dest_path}', shell=True)
+    else:
+        subprocess.check_call(f'gsutil -u {user_project} cp {source_path} {dest_path}', shell=True)
 
 
-def gs_copy_par(source_paths, dest_paths, num_threads=10):
+def gs_copy_par(source_paths, dest_paths, num_threads=10, user_project=None, verbose=False):
     """Parallel gsutil cp"""
     if len(source_paths) != len(dest_paths):
         raise ValueError("list of source and destination paths must be of equal length")
@@ -227,7 +225,7 @@ def gs_copy_par(source_paths, dest_paths, num_threads=10):
     print(f'Starting cp pool ({num_threads} threads)', flush=True)
     with mp.Pool(processes=int(num_threads)) as pool:
         for i in range(len(source_paths)):
-            res = pool.map_async(_gsutil_cp_wrapper, ((source_paths[i], dest_paths[i], ),))
+            res = pool.map_async(_gsutil_cp_wrapper, ((source_paths[i], dest_paths[i], user_project),))
             res_list.append(res)
         pool.close()
         pool.join()
