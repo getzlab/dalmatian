@@ -155,7 +155,7 @@ def workflow_time(workflow):
     if 'end' in workflow:
         return convert_time(workflow['end']) - convert_time(workflow['start'])
     else:
-        return np.NaN
+        return np.nan
 
 
 #------------------------------------------------------------------------------
@@ -173,38 +173,44 @@ def gs_list_bucket_files(bucket_id, path=None, ext=None):
     return s
 
 
-def gs_delete(file_list, chunk_size=500):
+def gs_delete(file_list, chunk_size=500, verbose=True, hide_stderr=True):
     """Delete list of files (paths starting with gs://)"""
     # number of calls is limited by command line size limit
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
+        if verbose:
+            print(f"\rDeleting chunk {i+1}/{n} (chunk size: {len(x)} files)", end='' if i < n-1 else None)
         cmd = 'echo -e "{}" | gsutil -m rm -I'.format('\n'.join(x))
-        subprocess.call(cmd, shell=True, executable='/bin/bash')
+        subprocess.call(cmd, shell=True, executable='/bin/bash', stderr=subprocess.DEVNULL if hide_stderr else None)
 
 
-def gs_copy(file_list, dest_dir, chunk_size=500, user_project=None):
+def gs_copy(file_list, dest_dir, chunk_size=500, user_project=None, verbose=True, hide_stderr=True):
     """Copy list of files (paths starting with gs://)"""
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
+        if verbose:
+            print(f"\rCopying chunk {i+1}/{n} (chunk size: {len(x)} files)", end='' if i < n-1 else None)
         if user_project is None:
             cmd = 'echo -e "{}" | gsutil -m cp -I {}'.format('\n'.join(x), dest_dir)
         else:
             cmd = 'echo -e "{}" | gsutil -u {} -m cp -I {}'.format('\n'.join(x), user_project, dest_dir)
-        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
+        subprocess.check_call(cmd, shell=True, executable='/bin/bash', stderr=subprocess.DEVNULL if hide_stderr else None)
 
 
-def gs_move(file_list, dest_dir, chunk_size=500, user_project=None):
+def gs_move(file_list, dest_dir, chunk_size=500, user_project=None, verbose=True, hide_stderr=True):
     """Move list of files (paths starting with gs://)"""
     n = int(np.ceil(len(file_list)/chunk_size))
     for i in range(n):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
+        if verbose:
+            print(f"\rMoving chunk {i+1}/{n} (chunk size: {len(x)} files)", end='' if i < n-1 else None)
         if user_project is None:
             cmd = 'echo -e "{}" | gsutil -m mv -I {}'.format('\n'.join(x), dest_dir)
         else:
             cmd = 'echo -e "{}" | gsutil -u {} -m mv -I {}'.format('\n'.join(x), user_project, dest_dir)
-        subprocess.check_call(cmd, shell=True, executable='/bin/bash')
+        subprocess.check_call(cmd, shell=True, executable='/bin/bash', stderr=subprocess.DEVNULL if hide_stderr else None)
 
 
 def _gsutil_cp_wrapper(args):
@@ -217,7 +223,7 @@ def _gsutil_cp_wrapper(args):
         subprocess.check_call(f'gsutil -u {user_project} cp {source_path} {dest_path}', shell=True)
 
 
-def gs_copy_par(source_paths, dest_paths, num_threads=10, user_project=None, verbose=False):
+def gs_copy_par(source_paths, dest_paths, num_threads=10, user_project=None):
     """Parallel gsutil cp"""
     if len(source_paths) != len(dest_paths):
         raise ValueError("list of source and destination paths must be of equal length")
