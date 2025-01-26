@@ -5,7 +5,7 @@
 
 [FISS](https://github.com/broadinstitute/fiss)' faithful companion.
 
-dalmatian is a collection of high-level functions for interacting with Firecloud via Pandas dataframes.
+dalmatian is a collection of high-level functions for interacting with Terra via Pandas dataframes.
 
 ### Install
 
@@ -13,14 +13,14 @@ dalmatian is a collection of high-level functions for interacting with Firecloud
 
 ### Requirements
 
-FireCloud uses the Google Cloud SDK (https://cloud.google.com/sdk/) to manage authorization. To use dalmatian, you must install the SDK and login locally with
+Terra uses the Google Cloud SDK (https://cloud.google.com/sdk/) to manage authorization. To use dalmatian, you must install the SDK and login locally with
 
 ```
 gcloud auth application-default login
 
 ```
 ### Examples
-Dalmatian provides the WorkspaceManager class for interacting with FireCloud workspaces.
+Dalmatian provides the WorkspaceManager class for interacting with Terra workspaces.
 ```
 import dalmatian
 wm = dalmatian.WorkspaceManager("namespace/workspace")
@@ -104,7 +104,7 @@ wm.create_submission(config_namespace, config_name, sample_set_id, 'reruns', exp
 
 ### Contents
 
-Including additional FireCloud Tools (enumerated below)
+Including additional Terra Tools (enumerated below)
 
 ```
 workflow_time
