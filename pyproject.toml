@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "firecloud-dalmatian"
+version = "0.0.20"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pandas",
+    "pytz",
+    "firecloud>=0.16.9",
+    "ipython",
+    "iso8601",
+    "google-cloud-storage>=1.13.2",
+    "agutil>=4.0.2",
+    "crayons>=0.2.0",
+    "hound>=0.2.0",
+]
+authors = [
+    {name = "Francois Aguet", email = "francois@broadinstitute.org"}
+]
+maintainers = [
+    {name = "Francois Aguet", email = "francois@broadinstitute.org"}
+]
+description = "Utilities for interacting with Terra via Pandas dataframes"
+readme = "README.md"
+license = {file = "LICENSE"}
+keywords = ["Workflow manager", "Terra"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator",
+]
+
+[project.urls]
+Repository = "https://github.com/getzlab/dalmatian.git"

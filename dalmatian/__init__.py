@@ -1,3 +1,4 @@
-__version__ = "0.0.19"
+import importlib.metadata
+__version__ = importlib.metadata.version(__name__)
 from .core import *
 from .wmanager import *
