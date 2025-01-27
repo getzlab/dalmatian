@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 packages = ["dalmatian"]
 
 [project]
-name = "firecloud-dalmatian"
+name = "dalmatian"
 version = "0.0.20"
 dependencies = [
     "numpy",
