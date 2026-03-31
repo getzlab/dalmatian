@@ -159,14 +159,14 @@ def workflow_time(workflow):
 
 
 #------------------------------------------------------------------------------
-#  Wrapper functions for gsutil calls
+#  Wrapper functions for gcloud storage calls
 #------------------------------------------------------------------------------
 def gs_list_bucket_files(bucket_id, path=None, ext=None):
     """Get list of all files stored in bucket"""
     if path is None:
-        s = subprocess.check_output(f'gsutil ls gs://{bucket_id}/**', shell=True)
+        s = subprocess.check_output(f'gcloud storage ls gs://{bucket_id}/**', shell=True)
     else:
-        s = subprocess.check_output(f'gsutil ls gs://{bucket_id}/{path}/**', shell=True)
+        s = subprocess.check_output(f'gcloud storage ls gs://{bucket_id}/{path}/**', shell=True)
     s = s.decode().strip().split('\n')
     if ext is not None:
         s = [i for i in s if i.endswith(ext)]
@@ -181,7 +181,7 @@ def gs_delete(file_list, chunk_size=500, verbose=True, hide_stderr=True):
         x = file_list[chunk_size*i:chunk_size*(i+1)]
         if verbose:
             print(f"\rDeleting chunk {i+1}/{n} (chunk size: {len(x)} files)", end='' if i < n-1 else None)
-        cmd = 'echo -e "{}" | gsutil -m rm -I'.format('\n'.join(x))
+        cmd = 'echo -e "{}" | gcloud storage rm -I'.format('\n'.join(x))
         subprocess.call(cmd, shell=True, executable='/bin/bash', stderr=subprocess.DEVNULL if hide_stderr else None)
 
 
@@ -193,9 +193,9 @@ def gs_copy(file_list, dest_dir, chunk_size=500, user_project=None, verbose=True
         if verbose:
             print(f"\rCopying chunk {i+1}/{n} (chunk size: {len(x)} files)", end='' if i < n-1 else None)
         if user_project is None:
-            cmd = 'echo -e "{}" | gsutil -m cp -I {}'.format('\n'.join(x), dest_dir)
+            cmd = 'echo -e "{}" | gcloud storage cp -I {}'.format('\n'.join(x), dest_dir)
         else:
-            cmd = 'echo -e "{}" | gsutil -u {} -m cp -I {}'.format('\n'.join(x), user_project, dest_dir)
+            cmd = 'echo -e "{}" | gcloud storage -u {} cp -I {}'.format('\n'.join(x), user_project, dest_dir)
         subprocess.check_call(cmd, shell=True, executable='/bin/bash', stderr=subprocess.DEVNULL if hide_stderr else None)
 
 
@@ -207,31 +207,31 @@ def gs_move(file_list, dest_dir, chunk_size=500, user_project=None, verbose=True
         if verbose:
             print(f"\rMoving chunk {i+1}/{n} (chunk size: {len(x)} files)", end='' if i < n-1 else None)
         if user_project is None:
-            cmd = 'echo -e "{}" | gsutil -m mv -I {}'.format('\n'.join(x), dest_dir)
+            cmd = 'echo -e "{}" | gcloud storage mv -I {}'.format('\n'.join(x), dest_dir)
         else:
-            cmd = 'echo -e "{}" | gsutil -u {} -m mv -I {}'.format('\n'.join(x), user_project, dest_dir)
+            cmd = 'echo -e "{}" | gcloud storage -u {} mv -I {}'.format('\n'.join(x), user_project, dest_dir)
         subprocess.check_call(cmd, shell=True, executable='/bin/bash', stderr=subprocess.DEVNULL if hide_stderr else None)
 
 
-def _gsutil_cp_wrapper(args):
-    """gsutil cp wrapper for gs_copy_par"""
+def _gcloud_cp_wrapper(args):
+    """gcloud storage cp wrapper for gs_copy_par"""
     source_path, dest_path, user_project = args
     filename = os.path.basename(dest_path)
     if user_project is None:
-        subprocess.check_call(f'gsutil cp {source_path} {dest_path}', shell=True)
+        subprocess.check_call(f'gcloud storage cp {source_path} {dest_path}', shell=True)
     else:
-        subprocess.check_call(f'gsutil -u {user_project} cp {source_path} {dest_path}', shell=True)
+        subprocess.check_call(f'gcloud storage -u {user_project} cp {source_path} {dest_path}', shell=True)
 
 
 def gs_copy_par(source_paths, dest_paths, num_threads=10, user_project=None):
-    """Parallel gsutil cp"""
+    """Parallel gcloud storage cp"""
     if len(source_paths) != len(dest_paths):
         raise ValueError("list of source and destination paths must be of equal length")
     res_list = []
     print(f'Starting cp pool ({num_threads} threads)', flush=True)
     with mp.Pool(processes=int(num_threads)) as pool:
         for i in range(len(source_paths)):
-            res = pool.map_async(_gsutil_cp_wrapper, ((source_paths[i], dest_paths[i], user_project),))
+            res = pool.map_async(_gcloud_cp_wrapper, ((source_paths[i], dest_paths[i], user_project),))
             res_list.append(res)
         pool.close()
         pool.join()
@@ -250,7 +250,7 @@ def gs_exists(file_list_s):
     for k,(i,p) in enumerate(zip(file_list_s.index, file_list_s), 1):
         print(f'\rChecking {k}/{len(file_list_s)} files', end='')
         try:
-            s = subprocess.check_output(f'gsutil -q stat {p}', shell=True)
+            s = subprocess.check_output(f'gcloud storage ls {p}', shell=True, stderr=subprocess.DEVNULL)
             status_s[i] = True
         except subprocess.CalledProcessError as e:
             s = e.stdout.decode()
@@ -265,7 +265,7 @@ def gs_size(file_list_s):
     file_list_s: pd.Series
     """
     prefix = os.path.commonprefix(file_list_s.tolist())
-    s = subprocess.check_output(f'gsutil ls -l {prefix}**', shell=True)
+    s = subprocess.check_output(f'gcloud storage ls -l {prefix}**', shell=True)
     gs_sizes = s.decode().strip().split('\n')[:-1]
     gs_sizes = pd.Series([np.int64(i.split()[0]) for i in gs_sizes],
         index=[i.split()[-1] for i in gs_sizes])
@@ -274,7 +274,7 @@ def gs_size(file_list_s):
 
 
 def _parse_stat_entry(se):
-    """convert output from 'gsutil stat' to pd.Series"""
+    """convert output from 'gcloud storage stat' to pd.Series"""
     se = se.strip().split('\n')
     filepath = se[0].strip(':')
     se = [i.split(':',1) for i in se[1:]]
@@ -286,8 +286,8 @@ def _parse_stat_entry(se):
 
 
 def gs_stat(wildcard_path, user_project=None):
-    """Wrapper for gsutil stat; returns output in a dataframe"""
-    cmd = 'gsutil'
+    """Wrapper for gcloud storage stat; returns output in a dataframe"""
+    cmd = 'gcloud storage'
     if user_project is not None:
         cmd += f' -u {user_project}'
     cmd += f' stat {wildcard_path}'
@@ -301,9 +301,9 @@ def gs_stat(wildcard_path, user_project=None):
 
 
 def get_md5hash(file_path, user_project=None):
-    """Calculate MD5 hash using gsutil or md5sum, depending on location"""
+    """Calculate MD5 hash using gcloud storage or md5sum, depending on location"""
     if file_path.startswith('gs://'):
-        cmd = 'gsutil'
+        cmd = 'gcloud storage'
         if user_project is not None:
             cmd += f' -u {user_project}'
         cmd += f' hash -m -h {file_path}'
