@@ -8,10 +8,11 @@ packages = ["dalmatian"]
 [project]
 name = "dalmatian"
 version = "0.0.20"
+requires-python = ">=3.14"
 dependencies = [
-    "numpy",
+    "numpy>=2.0",
     "matplotlib",
-    "pandas",
+    "pandas>=2.2",
     "pytz",
     "firecloud>=0.16.9",
     "ipython",

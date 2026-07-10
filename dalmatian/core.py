@@ -587,7 +587,7 @@ def decode_config(reference, decode_only=False):
         # only name, so we need to list configurations
         configs = list_configs(name=reference)
         try:
-            configs = configs.loc[configs.groupby('namespace').idxmax('snapshotId').snapshotId]
+            configs = configs.loc[configs.groupby('namespace')['snapshotId'].idxmax()]
         except AttributeError as e:
             raise ConfigNotFound(f"No config by name '{reference}'") from e
         if len(configs) > 1:

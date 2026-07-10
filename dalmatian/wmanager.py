@@ -653,7 +653,7 @@ class WorkspaceManager(object):
                 d['configuration'] = s['methodConfigurationName']
             df.append(d)
         df = pd.DataFrame(df)
-        df.set_index('entity_id', inplace=True)
+        df = df.set_index('entity_id')
         df['date'] = pd.to_datetime(df['date'], format="%H:%M:%S %m/%d/%Y")
         df = df[['configuration', 'status']+statuses+['date', 'submission_id']]
         if filter_active:
@@ -913,7 +913,7 @@ class WorkspaceManager(object):
             metadata = self.get_workflow_metadata(status_df.loc[i, 'submission_id'], status_df.loc[i, 'workflow_id'])
             state_df.loc[i] = [metadata['calls'][t][-1]['executionStatus'] if t in metadata['calls'] else 'Waiting' for t in workflow_tasks]
         print()
-        state_df.rename(columns={i:i.split('.')[1] for i in state_df.columns}, inplace=True)
+        state_df = state_df.rename(columns={i:i.split('.')[1] for i in state_df.columns})
         summary_df = state_df.apply(lambda x : x.value_counts(), axis = 0).fillna(0).astype(int)
         print(summary_df)
         state_df[['workflow_id', 'submission_id']] = status_df.loc[ix, ['workflow_id', 'submission_id']]
@@ -1013,7 +1013,7 @@ class WorkspaceManager(object):
 
         # get tasks for each workflow
         for w in np.unique(workflows):
-            workflow_status_df = status_df[workflows == w]
+            workflow_status_df = status_df[workflows == w].copy()
             tasks = np.sort(list(metadata_dict[workflow_status_df.index[0]]['calls'].keys()))
             task_names = [t.rsplit('.')[-1] for t in tasks]
 
@@ -1132,8 +1132,8 @@ class WorkspaceManager(object):
     def get_configs(self, latest_only=False):
         """Get all configurations in the workspace"""
         r = self.list_configs()
-        df = pd.io.json.json_normalize(r)
-        df.rename(columns={c:c.split('methodRepoMethod.')[-1] for c in df.columns}, inplace=True)
+        df = pd.json_normalize(r)
+        df = df.rename(columns={c:c.split('methodRepoMethod.')[-1] for c in df.columns})
         if latest_only:
             df = df.sort_values(['methodName','methodVersion'], ascending=False).groupby('methodName').head(1)
             # .sort_values('methodName')
@@ -1422,7 +1422,7 @@ class WorkspaceManager(object):
         # return df[df.index.isin(self.get_pair_sets().loc[pair_set, 'pairs'])]
         df = self.get_pairs()
         df = df[
-            np.in1d(df.index.values, self.get_pair_sets().loc[pair_set]['pairs'])]
+            np.isin(df.index.values, self.get_pair_sets().loc[pair_set]['pairs'])]
         return df
 
     def get_evaluator(self, live=True):
