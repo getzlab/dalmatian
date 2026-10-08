@@ -17,7 +17,7 @@ dependencies = [
     "firecloud>=0.16.9",
     "ipython",
     "iso8601",
-    "google-cloud-storage>=1.13.2",
+    "google-cloud-storage>=3.7.0",
     "agutil>=4.0.2",
     "crayons>=0.2.0",
     "hound>=0.2.0",
