@@ -5,6 +5,7 @@ import os
 import io
 from collections import defaultdict, namedtuple
 import functools
+import numbers
 from datetime import datetime
 import warnings
 from contextlib import contextmanager, ExitStack
@@ -1923,6 +1924,10 @@ class WorkspaceManager(object):
                 'itemsType': 'AttributeValue',
                 'items': value
             }
+        elif isinstance(value, numbers.Number) and not isinstance(value, (bool, np.bool_)):
+            # a number stays a number in the workspace; numpy's become Python's,
+            # which JSON can encode
+            return value.item() if isinstance(value, np.generic) else value
         return str(value)
 
 
