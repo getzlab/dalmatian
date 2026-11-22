@@ -2027,7 +2027,8 @@ class WorkspaceManager(object):
                             etype,
                             obj['name'],
                             attr['attributeName'],
-                            attr['addUpdateAttribute'] if isinstance(attr['addUpdateAttribute'], str)
+                            # a string or a number is logged as is
+                            attr['addUpdateAttribute'] if not isinstance(attr['addUpdateAttribute'], dict)
                             else (
                                 attr['addUpdateAttribute']['entityName'] if 'entityName' in attr['addUpdateAttribute']
                                 else attr['addUpdateAttribute']['items']
